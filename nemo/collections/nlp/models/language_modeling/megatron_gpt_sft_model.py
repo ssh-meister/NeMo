@@ -354,13 +354,24 @@ class MegatronGPTSFTModel(MegatronGPTModel):
     def inference_step(self, dataloader_iter, batch_idx, mode, dataloader_idx=0):
         # Call parent validation step to get the loss.
         loss = super().validation_step(dataloader_iter, batch_idx)
-        return {
-            'loss': loss,
-            'preds': None,
-            'labels': None,
-            'inputs': None,
-        }
-        # TODO (sandeepsub): Figure out the subsequent decode bits.
+        #return {
+        #    'loss': loss,
+        #    'preds': None,
+        #    'labels': None,
+        #    'inputs': None,
+        #}
+                    
+        #TODO (sandeepsub): Figure out the subsequent decode bits.
+        
+        #activations_checkpoint_granularity should be None during inference.
+        activations_checkpoint_granularity = self.cfg.activations_checkpoint_granularity
+        self.cfg.activations_checkpoint_granularity = None
+        #activations_checkpoint_method should be None during inference.
+        activations_checkpoint_method = self.cfg.activations_checkpoint_method
+        self.cfg.activations_checkpoint_method = None
+        
+        batch = next(dataloader_iter)
+        
         length_params: LengthParam = {
             "min_length": 0,
             "max_length": batch['tokens'].size(1) - batch['context_lengths'].max(),
@@ -386,6 +397,11 @@ class MegatronGPTSFTModel(MegatronGPTModel):
             length_params=length_params,
             check_sequence_parallel_and_checkpointing=False,  # We need to skip these checks since we'll manually enbale and disable checkpointing between training and validation.
         )
+
+        #turn activations_checkpoint_granularity to previous value
+        self.cfg.activations_checkpoint_granularity = activations_checkpoint_granularity
+        #turn activations_checkpoint_method to previous value
+        self.cfg.activations_checkpoint_method = activations_checkpoint_method
 
         preds_text = []
         labels_text = []
@@ -438,7 +454,7 @@ class MegatronGPTSFTModel(MegatronGPTModel):
             loss = super().validation_epoch_end([x['loss'] for x in output])
             # Determine the key used to log the loss based on the user provided name of the dataset or the dataloader index.
             loss_log_key = self._determine_log_key(data_cfg, dataloader_idx, "loss", mode)
-            self.log(loss_log_key, loss)
+            self.log(loss_log_key, loss, batch_size = data_cfg.micro_batch_size)
             averaged_loss.append(loss)
 
             # Skip the rest of this loop if the user wants to monitor the loss only.
@@ -456,11 +472,15 @@ class MegatronGPTSFTModel(MegatronGPTModel):
                     metric = metric['rougeL_fmeasure']
                 else:
                     metric = metric['acc']
+                        
+            metric = metric.cuda().to_dense()
+                                    
             torch.distributed.all_reduce(
                 metric, op=torch.distributed.ReduceOp.SUM, group=parallel_state.get_data_parallel_group()
             )
+
             metric = metric / parallel_state.get_data_parallel_world_size()
-            self.log(metric_log_key, metric)
+            self.log(metric_log_key, metric, batch_size = data_cfg.micro_batch_size)
             logging.info(f"{mode} {metric_name}: {metric}")
 
             metric_object.reset()
@@ -521,11 +541,11 @@ class MegatronGPTSFTModel(MegatronGPTModel):
             averaged_metric = 0.0 if monitor_mode == 'max' else 1e5
 
         if mode == 'validation':
-            self.log("validation_loss", averaged_loss)
+            self.log("validation_loss", averaged_loss, batch_size = data_cfg.micro_batch_size)
             if averaged_metric is not None:
                 self.log(f"validation_{self.val_metric_name}", averaged_metric)
         elif mode == 'test':
-            self.log("test_loss", averaged_loss)
+            self.log("test_loss", averaged_loss, batch_size = data_cfg.micro_batch_size)
             if averaged_metric is not None:
                 self.log(f"test_{self.test_metric_name}", averaged_metric)
 
