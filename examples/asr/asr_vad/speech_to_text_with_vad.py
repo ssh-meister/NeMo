@@ -72,7 +72,7 @@ from tqdm import tqdm
 from nemo.collections.asr.data import feature_to_text_dataset
 from nemo.collections.asr.metrics.wer import word_error_rate
 from nemo.collections.asr.models import ASRModel, EncDecClassificationModel
-from nemo.collections.asr.parts.submodules import CTCDecodingConfig
+from nemo.collections.asr.parts.submodules.ctc_decoding import CTCDecodingConfig
 from nemo.collections.asr.parts.submodules.rnnt_decoding import RNNTDecodingConfig
 from nemo.collections.asr.parts.utils.manifest_utils import read_manifest, write_manifest
 from nemo.collections.asr.parts.utils.vad_utils import (
@@ -269,25 +269,38 @@ def extract_audio_features(manifest_filepath: str, cfg: DictConfig, record_fn: C
 
     logging.info(f"Extracting features on {len(file_list)} audio files...")
     with record_fn("feat_extract_loop"):
-        for i, test_batch in enumerate(tqdm(vad_model.test_dataloader(), total=len(vad_model.test_dataloader()))):
-            test_batch = [x.to(vad_model.device) for x in test_batch]
-            with torch.amp.autocast(vad_model.device.type):
-                with record_fn("feat_extract_infer"):
-                    processed_signal, processed_signal_length = vad_model.preprocessor(
-                        input_signal=test_batch[0],
-                        length=test_batch[1],
-                    )
-                with record_fn("feat_extract_other"):
-                    processed_signal = processed_signal.squeeze(0)[:, :processed_signal_length]
-                    processed_signal = processed_signal.cpu()
-                    outpath = os.path.join(out_dir, file_list[i] + ".pt")
-                    outpath = str(Path(outpath).absolute())
-                    torch.save(processed_signal, outpath)
-                    manifest_data[i]["feature_file"] = outpath
-                    del test_batch
+        dataloader = vad_model.test_dataloader()
+        for i, test_batch in enumerate(tqdm(dataloader, total=len(dataloader))):
+            try:
+                test_batch = [x.to(vad_model.device) for x in test_batch]
+            except Exception as e:
+                logging.error(f"Skipping sample {file_list[i]} due to DataLoader error: {str(e)}")
+                manifest_data[i]["feature_file"] = None
+                continue
+
+            try:
+                with torch.amp.autocast(vad_model.device.type):
+                    with record_fn("feat_extract_infer"):
+                        processed_signal, processed_signal_length = vad_model.preprocessor(
+                            input_signal=test_batch[0],
+                            length=test_batch[1],
+                        )
+                    with record_fn("feat_extract_other"):
+                        processed_signal = processed_signal.squeeze(0)[:, :processed_signal_length]
+                        processed_signal = processed_signal.cpu()
+                        outpath = os.path.join(out_dir, file_list[i] + ".pt")
+                        outpath = str(Path(outpath).absolute())
+                        torch.save(processed_signal, outpath)
+                        manifest_data[i]["feature_file"] = outpath
+            except Exception as e:
+                logging.error(f"Error processing {file_list[i]}: {str(e)}")
+                manifest_data[i]["feature_file"] = None
+            finally:
+                del test_batch
 
     logging.info(f"Features saved at: {out_dir}")
-    write_manifest(new_manifest_filepath, manifest_data)
+    manifest_data_with_features = [sample for sample in manifest_data if sample['feature_file'] is not None]
+    write_manifest(new_manifest_filepath, manifest_data_with_features)
     return new_manifest_filepath
 
 
