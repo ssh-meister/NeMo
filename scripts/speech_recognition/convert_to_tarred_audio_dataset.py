@@ -175,7 +175,7 @@ class ASRTarredDatasetBuilder:
         num_workers: int = 0,
         buckets_num: int = 1,
         dynamic_buckets_num: int = 30,
-        dry_run: bool = False,
+        only_manifests: bool = False,
     ):
         """
         Creates a new tarred dataset from a given manifest file.
@@ -186,7 +186,7 @@ class ASRTarredDatasetBuilder:
             num_workers (int, optional): Number of parallel worker processes for writing tar files. Defaults to 0 (sequential processing).
             buckets_num (int, optional): Number of buckets for static bucketing. Defaults to 1 (no bucketing).
             dynamic_buckets_num (int, optional): Number of buckets to estimate for dynamic bucketing. Defaults to 30.
-            dry_run (bool, optional): If True, performs a dry run without creating actual tar files. Defaults to False.
+            only_manifests (bool, optional): If True, performs a dry run without creating actual tar files. Defaults to False.
 
         Raises:
             ValueError: If the configuration has not been set.
@@ -268,7 +268,7 @@ class ASRTarredDatasetBuilder:
         with Parallel(n_jobs=num_workers, verbose=config.num_shards) as parallel:
             # Call parallel tarfile construction
             new_entries_list = parallel(
-                delayed(self._create_shard)(entries[start_idx:end_idx], target_dir, i, manifest_folder, dry_run)
+                delayed(self._create_shard)(entries[start_idx:end_idx], target_dir, i, manifest_folder, only_manifests)
                 for i, (start_idx, end_idx) in enumerate(zip(start_indices, end_indices))
             )
 
@@ -351,7 +351,7 @@ class ASRTarredDatasetBuilder:
         metadata: ASRTarredDatasetMetadata,
         target_dir: str = "./tarred_concatenated/",
         num_workers: int = 1,
-        dry_run: bool = False,
+        only_manifests: bool = False,
     ):
         """
         Creates a concatenated tarred dataset from the base manifest and additional manifest files.
@@ -364,7 +364,7 @@ class ASRTarredDatasetBuilder:
             metadata (ASRTarredDatasetMetadata): Metadata instance containing configuration and overrides.
             target_dir (str, optional): Output directory where tarred files and manifests will be saved. Defaults to "./tarred_concatenated/".
             num_workers (int, optional): Number of parallel worker processes for creating tar files. Defaults to 1.
-            dry_run (bool, optional): If True, performs a dry run without creating actual tar files. Defaults to False.
+            only_manifests (bool, optional): If True, performs a dry run without creating actual tar files. Defaults to False.
 
         Raises:
             FileNotFoundError: If the base manifest file or any of the additional manifest files does not exist.
@@ -469,7 +469,7 @@ class ASRTarredDatasetBuilder:
             # Call parallel tarfile construction
             new_entries_list = parallel(
                 delayed(self._create_shard)(
-                    entries[start_idx:end_idx], target_dir, shard_idx, manifest_folder, dry_run
+                    entries[start_idx:end_idx], target_dir, shard_idx, manifest_folder, only_manifests
                 )
                 for i, (start_idx, end_idx, shard_idx) in enumerate(zip(start_indices, end_indices, shard_indices))
             )
@@ -615,7 +615,7 @@ class ASRTarredDatasetBuilder:
         ti.size = len(encoded_audio.getvalue())
         tar.addfile(ti, encoded_audio)
 
-    def _create_shard(self, entries, target_dir, shard_id, manifest_folder: str = None, dry_run: bool = False):
+    def _create_shard(self, entries, target_dir, shard_id, manifest_folder: str = None, only_manifests: bool = False):
         """Creates a tarball containing the audio files from `entries`."""
         if self.config.sort_in_shards:
             entries.sort(key=lambda x: x["duration"], reverse=False)
@@ -623,7 +623,7 @@ class ASRTarredDatasetBuilder:
         new_entries = []
 
         tar_filepath = os.path.join(target_dir, f'audio_{shard_id}.tar')
-        if not dry_run:
+        if not only_manifests:
             tar = tarfile.open(tar_filepath, mode='w', dereference=True)
 
         count = dict()
@@ -668,7 +668,7 @@ class ASRTarredDatasetBuilder:
                 entry_duration = "_".join(entry_duration)
 
                 to_write = base + "_" + entry_offset + "_" + entry_duration + ext
-                if not dry_run:
+                if not only_manifests:
                     self._write_to_tar(
                         tar, audio_filepath, to_write, duration=entry['duration'], offset=entry['offset']
                     )
@@ -678,7 +678,7 @@ class ASRTarredDatasetBuilder:
                 del entry['offset']
             else:
                 if squashed_filename not in count:
-                    if not dry_run:
+                    if not only_manifests:
                         self._write_to_tar(tar, audio_filepath, squashed_filename)
                     to_write = squashed_filename
                     count[squashed_filename] = 1
@@ -686,7 +686,7 @@ class ASRTarredDatasetBuilder:
                     to_write = base + "-sub" + str(count[squashed_filename]) + ext
                     count[squashed_filename] += 1
 
-            if dry_run:
+            if only_manifests:
                 entry['abs_audio_filepath'] = audio_filepath
 
             # Carry over every key in the entry, override audio_filepath and shard_id
@@ -697,7 +697,7 @@ class ASRTarredDatasetBuilder:
             }
             new_entries.append(new_entry)
 
-        if not dry_run:
+        if not only_manifests:
             tar.close()
         return new_entries
 
@@ -754,7 +754,7 @@ def create_tar_datasets(
     force_codec: str = None,
     workers: int = 1,
     slice_with_offset: bool = False,
-    dry_run: bool = False,
+    only_manifests: bool = False,
 ):
     builder = ASRTarredDatasetBuilder()
 
@@ -804,7 +804,7 @@ def create_tar_datasets(
             num_workers=workers,
             buckets_num=buckets_num,
             dynamic_buckets_num=dynamic_buckets_num,
-            dry_run=dry_run,
+            only_manifests=only_manifests,
         )
 
     else:
@@ -841,7 +841,7 @@ def create_tar_datasets(
             target_dir=target_dir,
             num_workers=workers,
             slice_with_offset=slice_with_offset,
-            dry_run=dry_run,
+            only_manifests=only_manifests,
         )
 
     if DALI_INDEX_SCRIPT_AVAILABLE and dali_index.INDEX_CREATOR_AVAILABLE:
@@ -964,7 +964,7 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--dry_run",
+        "--only_manifests",
         action='store_true',
         help=(
             "If set, only creates manifests for each shard without creating the actual tar files. "
