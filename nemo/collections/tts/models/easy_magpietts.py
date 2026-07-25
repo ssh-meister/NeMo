@@ -75,11 +75,14 @@ class ProcessBatchOutput:
         phoneme_logits: Predicted logits for phoneme tokens (None if no phoneme tokenizer)
         phoneme_tokens_target: Target phoneme tokens for loss computation
         phoneme_tokens_lens_target: Lengths of target phoneme tokens
+        phoneme_loss_sums_per_sample: Unreduced phoneme CE sum for each sample when loss is active.
+        phoneme_target_counts_per_sample: Valid stacked phoneme target count for each sample when loss is active.
         audio_codes_target: Target audio codes for loss computation (B, C, T'-1)
         audio_codes_lens_target: Lengths of target audio codes (B,)
         context_audio_codes: Processed context audio codes (B, C, T')
         context_audio_codes_lens: Length of processed context audio codes (B,)
         selected_training_mode: Name of the training mode used for this batch (e.g., "streaming_4_8")
+        phoneme_loss_active: Whether phoneme loss was optimized for this batch.
     """
 
     loss: torch.Tensor
@@ -91,11 +94,14 @@ class ProcessBatchOutput:
     phoneme_logits: Optional[torch.Tensor]
     phoneme_tokens_target: Optional[torch.Tensor]
     phoneme_tokens_lens_target: Optional[torch.Tensor]
+    phoneme_loss_sums_per_sample: Optional[torch.Tensor]
+    phoneme_target_counts_per_sample: Optional[torch.Tensor]
     audio_codes_target: torch.Tensor
     audio_codes_lens_target: torch.Tensor
     context_audio_codes: torch.Tensor
     context_audio_codes_lens: torch.Tensor
     selected_training_mode: Optional[str]
+    phoneme_loss_active: bool
 
 
 class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
@@ -119,6 +125,8 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
         self.phoneme_loss_weight = cfg.get('phoneme_loss_weight', 1.0)
         self.parallel_codebook_loss_scale = cfg.get('parallel_codebook_loss_scale', 1.0)
         self.local_transformer_loss_scale = cfg.get('local_transformer_loss_scale', 1.0)
+        self.partial_phoneme_debug_log_interval = cfg.get('partial_phoneme_debug_log_interval', 100)
+        self._last_partial_phoneme_debug_step = -1
 
         self.cross_entropy_loss = nn.CrossEntropyLoss(reduction='none')
 
@@ -200,21 +208,160 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
 
     def compute_phoneme_loss(self, logits, phoneme_tokens, phoneme_tokens_lens):
         loss_mask = get_mask_from_lengths(phoneme_tokens_lens)
-        total_phoneme_loss = None
+        loss_sums, target_counts = self.compute_phoneme_loss_sums_per_sample(
+            logits, phoneme_tokens, phoneme_tokens_lens
+        )
+        total_phoneme_loss = loss_sums.sum() / target_counts.sum()
+        return total_phoneme_loss, loss_mask, loss_sums, target_counts
+
+    def compute_phoneme_loss_sums_per_sample(self, logits, phoneme_tokens, phoneme_tokens_lens):
+        """Return unreduced phoneme CE sums and valid target counts for each sample."""
+        loss_mask = get_mask_from_lengths(phoneme_tokens_lens)
+        loss_sums = torch.zeros(logits.shape[0], device=logits.device, dtype=torch.float32)
         for codebook in range(self.phoneme_stacking_factor):
-            si = codebook * self.phoneme_vocab_size
-            ei = si + self.phoneme_vocab_size
-            phoneme_logits = logits[:, :, si:ei]
-            phoneme_targets = phoneme_tokens[:, codebook]
-            phoneme_loss = self.cross_entropy_loss(phoneme_logits.permute(0, 2, 1), phoneme_targets)
-            phoneme_loss = phoneme_loss * loss_mask
-            phoneme_loss = phoneme_loss.sum() / loss_mask.sum()
-            if total_phoneme_loss is None:
-                total_phoneme_loss = phoneme_loss
-            else:
-                total_phoneme_loss = total_phoneme_loss + phoneme_loss
-        total_phoneme_loss = total_phoneme_loss / self.phoneme_stacking_factor
-        return total_phoneme_loss, loss_mask
+            start = codebook * self.phoneme_vocab_size
+            end = start + self.phoneme_vocab_size
+            codebook_logits = logits[:, :, start:end]
+            codebook_targets = phoneme_tokens[:, codebook]
+            token_loss = self.cross_entropy_loss(codebook_logits.permute(0, 2, 1), codebook_targets)
+            loss_sums += (token_loss.float() * loss_mask).sum(dim=1)
+        target_counts = phoneme_tokens_lens.float() * self.phoneme_stacking_factor
+        return loss_sums, target_counts
+
+    @staticmethod
+    def _distributed_sum(values: torch.Tensor) -> torch.Tensor:
+        values = values.clone()
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            torch.distributed.all_reduce(values, op=torch.distributed.ReduceOp.SUM)
+        return values
+
+    def _log_partial_phoneme_diagnostics(self, batch, batch_output, batch_idx):
+        """Log augmentation rates and phoneme CE for transformed and randomized plain-control samples."""
+        if not self.enable_phoneme_text_input or "partial_phoneme_eligible" not in batch:
+            return
+
+        eligible = batch["partial_phoneme_eligible"].bool()
+        partial = eligible & batch["partial_phoneme_applied"].bool()
+        plain = eligible & ~batch["partial_phoneme_selected"].bool()
+
+        partial_loss_sum = torch.zeros((), device=self.device)
+        partial_target_count = torch.zeros((), device=self.device)
+        plain_loss_sum = torch.zeros((), device=self.device)
+        plain_target_count = torch.zeros((), device=self.device)
+        active_sample_count = torch.zeros((), device=self.device)
+        if batch_output.phoneme_loss_active:
+            with torch.no_grad():
+                loss_sums = batch_output.phoneme_loss_sums_per_sample.detach()
+                target_counts = batch_output.phoneme_target_counts_per_sample
+                partial_loss_sum = loss_sums[partial].sum()
+                partial_target_count = target_counts[partial].sum()
+                plain_loss_sum = loss_sums[plain].sum()
+                plain_target_count = target_counts[plain].sum()
+                active_sample_count = eligible.sum().to(dtype=loss_sums.dtype)
+
+        local_stats = torch.stack(
+            [
+                partial_loss_sum,
+                partial_target_count,
+                plain_loss_sum,
+                plain_target_count,
+                eligible.sum(),
+                batch["partial_phoneme_selected"][eligible].sum(),
+                partial.sum(),
+                plain.sum(),
+                batch["partial_phoneme_span_counts"][eligible].sum(),
+                batch["partial_phoneme_token_counts"][eligible].sum(),
+                batch["text_lens"][eligible].sum(),
+                batch["ipa_alignment_mismatch_counts"].sum(),
+                batch["ipa_alignment_counts"].sum(),
+                torch.tensor(batch["text"].shape[0], device=self.device),
+                active_sample_count,
+                batch["partial_phoneme_word_probs"][batch["partial_phoneme_selected"]].sum(),
+            ]
+        ).float()
+        stats = self._distributed_sum(local_stats)
+
+        (
+            partial_loss_sum,
+            partial_target_count,
+            plain_loss_sum,
+            plain_target_count,
+            eligible_count,
+            selected_count,
+            partial_count,
+            plain_count,
+            span_count,
+            partial_input_token_count,
+            eligible_text_token_count,
+            alignment_mismatch_count,
+            alignment_count,
+            sample_count,
+            active_sample_count,
+            sampled_word_prob_sum,
+        ) = stats
+
+        metrics = {
+            "train/partial_phoneme/eligible_sample_fraction": eligible_count / sample_count.clamp_min(1),
+            "train/partial_phoneme/selected_fraction_of_eligible": selected_count / eligible_count.clamp_min(1),
+            "train/partial_phoneme/applied_fraction_of_eligible": partial_count / eligible_count.clamp_min(1),
+            "train/partial_phoneme/selected_noop_fraction": (selected_count - partial_count)
+            / selected_count.clamp_min(1),
+            "train/partial_phoneme/mean_sampled_word_probability": sampled_word_prob_sum
+            / selected_count.clamp_min(1),
+            "train/partial_phoneme/plain_control_sample_count": plain_count,
+            "train/partial_phoneme/partial_sample_count": partial_count,
+            "train/partial_phoneme/active_loss_sample_count": active_sample_count,
+            "train/partial_phoneme/mean_spans_per_eligible_sample": span_count / eligible_count.clamp_min(1),
+            "train/partial_phoneme/input_token_fraction": partial_input_token_count
+            / eligible_text_token_count.clamp_min(1),
+            "train/partial_phoneme/alignment_mismatch_fraction": alignment_mismatch_count
+            / alignment_count.clamp_min(1),
+        }
+        if partial_target_count > 0:
+            metrics["train/phoneme_loss_partial_text"] = partial_loss_sum / partial_target_count
+        if plain_target_count > 0:
+            metrics["train/phoneme_loss_plain_text"] = plain_loss_sum / plain_target_count
+        if partial_target_count > 0 and plain_target_count > 0:
+            partial_loss = partial_loss_sum / partial_target_count
+            plain_loss = plain_loss_sum / plain_target_count
+            metrics["train/phoneme_loss_partial_minus_plain"] = partial_loss - plain_loss
+            metrics["train/phoneme_loss_partial_to_plain_ratio"] = partial_loss / plain_loss.clamp_min(1e-8)
+        self.log_dict(metrics, on_step=True, on_epoch=False, sync_dist=False)
+
+        should_log_examples = (
+            self.global_rank == 0
+            and self.partial_phoneme_debug_log_interval > 0
+            and self.global_step % self.partial_phoneme_debug_log_interval == 0
+            and self._last_partial_phoneme_debug_step != self.global_step
+        )
+        if not should_log_examples:
+            return
+        self._last_partial_phoneme_debug_step = self.global_step
+
+        example_indices = []
+        alignment_mismatch = batch["ipa_alignment_mismatch_counts"] > 0
+        for mask in (partial, plain, alignment_mismatch):
+            indices = mask.nonzero(as_tuple=False).flatten()
+            if indices.numel() > 0 and int(indices[0].item()) not in example_indices:
+                example_indices.append(int(indices[0].item()))
+        for sample_idx in example_indices:
+            text_len = int(batch["text_lens"][sample_idx].item())
+            token_ids = batch["text"][sample_idx, :text_len].tolist()
+            raw_text = batch["raw_texts"][sample_idx]
+            model_text = batch["text_inputs"][sample_idx]
+            logging.info(
+                "[PartialPhonemeDebug] "
+                f"step={self.global_step} batch_idx={batch_idx} sample_idx={sample_idx} "
+                f"dataset={batch['dataset_names'][sample_idx]} language={batch['languages'][sample_idx]} "
+                f"eligible={bool(eligible[sample_idx])} selected={bool(batch['partial_phoneme_selected'][sample_idx])} "
+                f"applied={bool(batch['partial_phoneme_applied'][sample_idx])} "
+                f"word_prob={float(batch['partial_phoneme_word_probs'][sample_idx]):.4f} "
+                f"spans={int(batch['partial_phoneme_span_counts'][sample_idx])} "
+                f"phoneme_input_tokens={int(batch['partial_phoneme_token_counts'][sample_idx])} "
+                f"alignment_mismatches={int(batch['ipa_alignment_mismatch_counts'][sample_idx])}/"
+                f"{int(batch['ipa_alignment_counts'][sample_idx])} "
+                f"raw_text={raw_text[:500]!r} model_text={model_text[:500]!r} token_ids={token_ids[:100]}"
+            )
 
     def log_val_audio_example(
         self,
@@ -881,6 +1028,9 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
         pb_phoneme_logits = None
         pb_phoneme_tokens_target = None
         pb_phoneme_tokens_lens_target = None
+        phoneme_loss_sums_per_sample = None
+        phoneme_target_counts_per_sample = None
+        phoneme_loss_active = False
         if self.phoneme_tokenizer is not None and phoneme_tokens_stacked is not None:
             # Phoneme predictions start at phoneme_delay
             pred_embeddings_phoneme = self.slice_sequence_embeddings(
@@ -895,9 +1045,15 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             if (phoneme_corruption_mode != 'repeat_skip') and not (
                 dropout_complete_phoneme_channel or dropout_conditional_input or dropout_text_input
             ):
-                phoneme_loss, _ = self.compute_phoneme_loss(
+                (
+                    phoneme_loss,
+                    _,
+                    phoneme_loss_sums_per_sample,
+                    phoneme_target_counts_per_sample,
+                ) = self.compute_phoneme_loss(
                     pb_phoneme_logits, pb_phoneme_tokens_target, pb_phoneme_tokens_lens_target
                 )
+                phoneme_loss_active = True
             else:
                 phoneme_loss = torch.tensor(0.0, device=logits.device)
 
@@ -913,11 +1069,14 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             phoneme_logits=pb_phoneme_logits,
             phoneme_tokens_target=pb_phoneme_tokens_target,
             phoneme_tokens_lens_target=pb_phoneme_tokens_lens_target,
+            phoneme_loss_sums_per_sample=phoneme_loss_sums_per_sample,
+            phoneme_target_counts_per_sample=phoneme_target_counts_per_sample,
             audio_codes_target=audio_codes_target,
             audio_codes_lens_target=audio_codes_lens_target,
             context_audio_codes=context_audio_codes_processed,
             context_audio_codes_lens=context_audio_codes_lens_processed,
             selected_training_mode=selected_training_mode.name if selected_training_mode is not None else None,
+            phoneme_loss_active=phoneme_loss_active,
         )
 
     def training_step(self, batch, batch_idx):
@@ -960,6 +1119,7 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
         if self.phoneme_tokenizer is not None:
             phoneme_loss = batch_output.phoneme_loss
             self.log('train/phoneme_loss', phoneme_loss, prog_bar=True, sync_dist=True)
+            self._log_partial_phoneme_diagnostics(batch, batch_output, batch_idx)
 
         local_transformer_loss = batch_output.local_transformer_loss
         if local_transformer_loss is not None:

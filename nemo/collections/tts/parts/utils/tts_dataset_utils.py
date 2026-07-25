@@ -152,6 +152,47 @@ def _split_text_and_phoneme_spans(
     return [(kind, segment) for kind, segment in segments if segment]
 
 
+def validate_ipa_alignment(text: str, ipa_alignment: Optional[List]) -> Tuple[List, int, int]:
+    """Return valid alignment items plus total and invalid item counts."""
+    if ipa_alignment is None:
+        return [], 0, 0
+    if not isinstance(ipa_alignment, (list, tuple)):
+        return [], 1, 1
+
+    valid_items = []
+    invalid_count = 0
+    previous_end = 0
+    for item in ipa_alignment:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            invalid_count += 1
+            continue
+
+        start, end, source_text, ipa_text = item
+        valid_offsets = (
+            type(start) is int
+            and type(end) is int
+            and previous_end <= start < end <= len(text)
+        )
+        valid_content = (
+            valid_offsets
+            and isinstance(source_text, str)
+            and bool(source_text)
+            and text[start:end] == source_text
+            and isinstance(ipa_text, str)
+            and bool(ipa_text.strip())
+        )
+        if not valid_content:
+            invalid_count += 1
+            if valid_offsets:
+                previous_end = end
+            continue
+
+        valid_items.append(item)
+        previous_end = end
+
+    return valid_items, len(ipa_alignment), invalid_count
+
+
 def partially_phonemize_text(
     text: str,
     ipa_alignment: Optional[List],
@@ -163,6 +204,9 @@ def partially_phonemize_text(
     _validate_probability("partial_phoneme_word_prob", partial_phoneme_word_prob)
     if partial_phoneme_word_prob == 0.0 or not text or not ipa_alignment:
         return text
+    ipa_alignment, alignment_count, invalid_count = validate_ipa_alignment(text, ipa_alignment)
+    if invalid_count:
+        raise ValueError(f"Invalid IPA alignment: {invalid_count} of {alignment_count} items do not match the text")
 
     output_parts = []
     cursor = 0

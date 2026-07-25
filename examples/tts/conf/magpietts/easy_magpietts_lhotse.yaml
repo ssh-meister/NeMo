@@ -101,6 +101,7 @@ model:
   partial_phoneme_word_prob: 0.5 # Fallback fixed per-alignment probability when min/max are not set.
   partial_phoneme_word_prob_min: 0.25 # Sampled per-alignment probability lower bound.
   partial_phoneme_word_prob_max: 0.75 # Sampled per-alignment probability upper bound.
+  partial_phoneme_debug_log_interval: 100 # Log representative partial/plain inputs every N train steps; 0 disables.
   phoneme_text_bop_marker: "<bop>"
   phoneme_text_eop_marker: "<eop>"
   ignore_phoneme_languages: [] # Languages for which missing IPA phoneme fields are allowed during training.

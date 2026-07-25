@@ -37,6 +37,7 @@ from nemo.collections.tts.parts.utils.tts_dataset_utils import (
     partially_phonemize_text,
     stack_tensors,
     tokenize_text_with_phoneme_spans,
+    validate_ipa_alignment,
 )
 from nemo.core.classes.common import safe_instantiate
 from nemo.utils import logging
@@ -288,8 +289,17 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         raw_text_list = (
             []
         )  # raw text here is the string of normalized text or text stored in the supervision segment. Used to distinguish from text tokens.
+        text_input_list = []
         phoneme_token_list = []
         phoneme_token_len_list = []
+        partial_phoneme_eligible_list = []
+        partial_phoneme_selected_list = []
+        partial_phoneme_applied_list = []
+        partial_phoneme_span_count_list = []
+        partial_phoneme_token_count_list = []
+        partial_phoneme_word_prob_list = []
+        ipa_alignment_count_list = []
+        ipa_alignment_mismatch_count_list = []
 
         def _sample_context_duration_with_available_limit(available_duration_sec: float) -> float:
             effective_duration_max = min(self.context_duration_max, available_duration_sec)
@@ -479,19 +489,34 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
                 text_str = cut.supervisions[0].text
             raw_text_list.append(text_str)
             text_for_tokens = text_str
-            if (
+            raw_ipa_alignment = (
+                cut.supervisions[0].ipa_alignment if cut.supervisions[0].has_custom("ipa_alignment") else None
+            )
+            ipa_alignment, ipa_alignment_count, ipa_alignment_mismatch_count = validate_ipa_alignment(
+                text_str, raw_ipa_alignment
+            )
+            has_existing_phoneme_spans = has_phoneme_text_spans(
+                text_str,
+                bop_marker=self.phoneme_text_bop_marker,
+                eop_marker=self.phoneme_text_eop_marker,
+            )
+            partial_phoneme_candidate = (
                 self.dataset_type == 'train'
                 and self.enable_phoneme_text_input
                 and self.partial_phoneme_text_prob > 0.0
                 and language not in self.ignore_phoneme_languages
-                and cut.supervisions[0].has_custom("ipa_alignment")
-                and not has_phoneme_text_spans(
-                    text_str,
-                    bop_marker=self.phoneme_text_bop_marker,
-                    eop_marker=self.phoneme_text_eop_marker,
-                )
-                and random.random() < self.partial_phoneme_text_prob
-            ):
+                and not has_existing_phoneme_spans
+            )
+            partial_phoneme_eligible = (
+                partial_phoneme_candidate
+                and bool(ipa_alignment)
+                and ipa_alignment_mismatch_count == 0
+            )
+            partial_phoneme_selected = partial_phoneme_eligible and (
+                random.random() < self.partial_phoneme_text_prob
+            )
+            sampled_word_prob = -1.0
+            if partial_phoneme_selected:
                 min_word_prob = (
                     self.partial_phoneme_word_prob
                     if self.partial_phoneme_word_prob_min is None
@@ -507,7 +532,7 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
                 )
                 text_for_tokens = partially_phonemize_text(
                     text=text_str,
-                    ipa_alignment=cut.supervisions[0].ipa_alignment,
+                    ipa_alignment=ipa_alignment,
                     partial_phoneme_word_prob=sampled_word_prob,
                     bop_marker=self.phoneme_text_bop_marker,
                     eop_marker=self.phoneme_text_eop_marker,
@@ -527,6 +552,39 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
                 bop_marker=self.phoneme_text_bop_marker,
                 eop_marker=self.phoneme_text_eop_marker,
             )
+            if self.enable_phoneme_text_input:
+                partial_phoneme_token_count = sum(
+                    self.text_phoneme_token_offset <= token_id
+                    < self.text_phoneme_token_offset + self.phoneme_tokenizer.vocab_size
+                    for token_id in tokens
+                )
+            else:
+                partial_phoneme_token_count = 0
+            if partial_phoneme_selected and text_for_tokens != text_str and partial_phoneme_token_count == 0:
+                text_for_tokens = text_str
+                tokens = tokenize_text_with_phoneme_spans(
+                    text_tokenizer=self.text_tokenizer,
+                    text_str=text_for_tokens,
+                    tokenizer_name=tokenizer_name,
+                    enable_phoneme_text_input=self.enable_phoneme_text_input,
+                    phoneme_tokenizer=self.phoneme_tokenizer,
+                    text_phoneme_token_offset=self.text_phoneme_token_offset,
+                    bop_marker=self.phoneme_text_bop_marker,
+                    eop_marker=self.phoneme_text_eop_marker,
+                )
+            text_input_list.append(text_for_tokens)
+            partial_phoneme_span_count = text_for_tokens.count(self.phoneme_text_bop_marker)
+            partial_phoneme_eligible_list.append(partial_phoneme_eligible)
+            partial_phoneme_selected_list.append(partial_phoneme_selected)
+            partial_phoneme_applied_list.append(partial_phoneme_token_count > 0)
+            partial_phoneme_span_count_list.append(partial_phoneme_span_count)
+            partial_phoneme_token_count_list.append(partial_phoneme_token_count)
+            partial_phoneme_word_prob_list.append(sampled_word_prob)
+            ipa_alignment_count_list.append(ipa_alignment_count if partial_phoneme_candidate else 0)
+            ipa_alignment_mismatch_count_list.append(
+                ipa_alignment_mismatch_count if partial_phoneme_candidate else 0
+            )
+
             tokens = tokens + [self.eos_id]  # Not adding BOS id
             tokens = torch.tensor(tokens, dtype=torch.int32)
             text_len = tokens.shape[0]
@@ -576,9 +634,18 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         batch_dict = {
             "dataset_names": dataset_name_list,
             "raw_texts": raw_text_list,
+            "text_inputs": text_input_list,
             "languages": language_list,
             "text": collate_vectors(token_list, padding_value=self.pad_id),  # (B, max_len)
             "text_lens": torch.IntTensor(token_len_list),
+            "partial_phoneme_eligible": torch.BoolTensor(partial_phoneme_eligible_list),
+            "partial_phoneme_selected": torch.BoolTensor(partial_phoneme_selected_list),
+            "partial_phoneme_applied": torch.BoolTensor(partial_phoneme_applied_list),
+            "partial_phoneme_span_counts": torch.IntTensor(partial_phoneme_span_count_list),
+            "partial_phoneme_token_counts": torch.IntTensor(partial_phoneme_token_count_list),
+            "partial_phoneme_word_probs": torch.FloatTensor(partial_phoneme_word_prob_list),
+            "ipa_alignment_counts": torch.IntTensor(ipa_alignment_count_list),
+            "ipa_alignment_mismatch_counts": torch.IntTensor(ipa_alignment_mismatch_count_list),
         }
 
         if self.phoneme_tokenizer is not None:

@@ -37,6 +37,7 @@ from nemo.collections.tts.parts.utils.tts_dataset_utils import (
     split_by_sentence,
     stack_tensors,
     tokenize_text_with_phoneme_spans,
+    validate_ipa_alignment,
 )
 
 
@@ -518,6 +519,36 @@ class TestPhonemeTextInput:
     def test_partially_phonemize_text_without_alignment_is_noop(self):
         assert partially_phonemize_text("hello", None, 1.0) == "hello"
         assert partially_phonemize_text("hello", [], 1.0) == "hello"
+
+    @pytest.mark.run_only_on('CPU')
+    @pytest.mark.unit
+    def test_invalid_ipa_alignment_is_detected_before_phonemization(self):
+        alignment = [[0, 2, "hi", "ab"], [3, 6, "who", "c"]]
+
+        valid_items, item_count, invalid_count = validate_ipa_alignment("hi how", alignment)
+
+        assert valid_items == [[0, 2, "hi", "ab"]]
+        assert item_count == 2
+        assert invalid_count == 1
+        with pytest.raises(ValueError, match="1 of 2 items"):
+            partially_phonemize_text("hi how", alignment, 1.0)
+
+    @pytest.mark.run_only_on('CPU')
+    @pytest.mark.unit
+    def test_malformed_and_overlapping_ipa_alignments_are_detected(self):
+        alignment = [
+            None,
+            [0, 4, "hi h", "ab"],
+            [3, 6, "how", "c"],
+            [True, 2, "i", "d"],
+            [6, 6, "", "e"],
+        ]
+
+        valid_items, item_count, invalid_count = validate_ipa_alignment("hi how", alignment)
+
+        assert valid_items == [[0, 4, "hi h", "ab"]]
+        assert item_count == 5
+        assert invalid_count == 4
 
     @pytest.mark.run_only_on('CPU')
     @pytest.mark.unit
