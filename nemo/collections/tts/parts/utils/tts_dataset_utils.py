@@ -230,25 +230,46 @@ def validate_ipa_alignment(text: str, ipa_alignment: Optional[List]) -> Tuple[Li
 def partially_phonemize_text(
     text: str,
     ipa_alignment: Optional[List],
-    partial_phoneme_word_prob: float,
+    partial_phoneme_portion: float,
+    full_ipa_text: Optional[str] = None,
     bop_marker: str = "<bop>",
     eop_marker: str = "<eop>",
 ) -> str:
-    """Replace sampled aligned spans with their precomputed IPA."""
-    _validate_probability("partial_phoneme_word_prob", partial_phoneme_word_prob)
-    if partial_phoneme_word_prob == 0.0 or not text or not ipa_alignment:
+    """Replace a sampled portion of aligned words, merging adjacent words into IPA spans."""
+    _validate_probability("partial_phoneme_portion", partial_phoneme_portion)
+    if partial_phoneme_portion == 0.0 or not text or not ipa_alignment:
         return text
     ipa_alignment, alignment_count, invalid_count = validate_ipa_alignment(text, ipa_alignment)
     if invalid_count:
         raise ValueError(f"Invalid IPA alignment: {invalid_count} of {alignment_count} items do not match the text")
+    if not full_ipa_text:
+        return text
+
+    num_selected = min(len(ipa_alignment), max(1, round(partial_phoneme_portion * len(ipa_alignment))))
+    if num_selected == len(ipa_alignment):
+        return f"{bop_marker}{full_ipa_text}{eop_marker}"
+
+    ipa_ranges = find_ordered_subsequence_ranges(full_ipa_text, [item[3].strip() for item in ipa_alignment])
+    if any(ipa_range is None for ipa_range in ipa_ranges):
+        return text
+
+    selected_indices = sorted(random.sample(range(len(ipa_alignment)), num_selected))
+    selected_runs = []
+    for index in selected_indices:
+        if selected_runs and index == selected_runs[-1][1] + 1:
+            selected_runs[-1] = (selected_runs[-1][0], index)
+        else:
+            selected_runs.append((index, index))
 
     output_parts = []
     cursor = 0
-    for start, end, _source_text, ipa_text in ipa_alignment:
-        if random.random() >= partial_phoneme_word_prob:
-            continue
+    for first_index, last_index in selected_runs:
+        start = ipa_alignment[first_index][0]
+        end = ipa_alignment[last_index][1]
+        ipa_start = ipa_ranges[first_index][0]
+        ipa_end = ipa_ranges[last_index][1]
         output_parts.append(text[cursor:start])
-        output_parts.append(f"{bop_marker}{ipa_text}{eop_marker}")
+        output_parts.append(f"{bop_marker}{full_ipa_text[ipa_start:ipa_end]}{eop_marker}")
         cursor = end
     output_parts.append(text[cursor:])
 

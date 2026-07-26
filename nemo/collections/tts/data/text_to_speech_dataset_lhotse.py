@@ -191,9 +191,8 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         enable_phoneme_text_input: bool = False,
         text_phoneme_token_offset: int = None,
         partial_phoneme_text_prob: float = 0.0,
-        partial_phoneme_word_prob: float = 0.5,
-        partial_phoneme_word_prob_min: float = None,
-        partial_phoneme_word_prob_max: float = None,
+        partial_phoneme_portion_min: float = 0.25,
+        partial_phoneme_portion_max: float = 0.75,
         phoneme_text_bop_marker: str = "<bop>",
         phoneme_text_eop_marker: str = "<eop>",
         add_language_to_context_text: bool = False,
@@ -225,9 +224,8 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         self.enable_phoneme_text_input = enable_phoneme_text_input
         self.text_phoneme_token_offset = text_phoneme_token_offset
         self.partial_phoneme_text_prob = partial_phoneme_text_prob
-        self.partial_phoneme_word_prob = partial_phoneme_word_prob
-        self.partial_phoneme_word_prob_min = partial_phoneme_word_prob_min
-        self.partial_phoneme_word_prob_max = partial_phoneme_word_prob_max
+        self.partial_phoneme_portion_min = partial_phoneme_portion_min
+        self.partial_phoneme_portion_max = partial_phoneme_portion_max
         self.phoneme_text_bop_marker = phoneme_text_bop_marker
         self.phoneme_text_eop_marker = phoneme_text_eop_marker
         self.add_language_to_context_text = add_language_to_context_text
@@ -299,7 +297,7 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         partial_phoneme_applied_list = []
         partial_phoneme_span_count_list = []
         partial_phoneme_token_count_list = []
-        partial_phoneme_word_prob_list = []
+        partial_phoneme_portion_list = []
         ipa_alignment_count_list = []
         ipa_alignment_mismatch_count_list = []
         partial_phoneme_span_text_list = []
@@ -524,25 +522,20 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
             partial_phoneme_selected = partial_phoneme_eligible and (
                 random.random() < self.partial_phoneme_text_prob
             )
-            sampled_word_prob = -1.0
+            sampled_portion = -1.0
             if partial_phoneme_selected:
-                min_word_prob = (
-                    self.partial_phoneme_word_prob
-                    if self.partial_phoneme_word_prob_min is None
-                    else self.partial_phoneme_word_prob_min
-                )
-                max_word_prob = (
-                    self.partial_phoneme_word_prob
-                    if self.partial_phoneme_word_prob_max is None
-                    else self.partial_phoneme_word_prob_max
-                )
-                sampled_word_prob = _sample_probability_range(
-                    "partial_phoneme_word_prob", min_word_prob, max_word_prob
+                sampled_portion = _sample_probability_range(
+                    "partial_phoneme_portion",
+                    self.partial_phoneme_portion_min,
+                    self.partial_phoneme_portion_max,
                 )
                 text_for_tokens = partially_phonemize_text(
                     text=text_str,
                     ipa_alignment=ipa_alignment,
-                    partial_phoneme_word_prob=sampled_word_prob,
+                    partial_phoneme_portion=sampled_portion,
+                    full_ipa_text=(
+                        cut.supervisions[0].ipa if cut.supervisions[0].has_custom("ipa") else None
+                    ),
                     bop_marker=self.phoneme_text_bop_marker,
                     eop_marker=self.phoneme_text_eop_marker,
                 )
@@ -598,7 +591,7 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
             partial_phoneme_applied_list.append(partial_phoneme_token_count > 0)
             partial_phoneme_span_count_list.append(partial_phoneme_span_count)
             partial_phoneme_token_count_list.append(partial_phoneme_token_count)
-            partial_phoneme_word_prob_list.append(sampled_word_prob)
+            partial_phoneme_portion_list.append(sampled_portion)
             ipa_alignment_count_list.append(ipa_alignment_count if partial_phoneme_candidate else 0)
             ipa_alignment_mismatch_count_list.append(
                 ipa_alignment_mismatch_count if partial_phoneme_candidate else 0
@@ -687,7 +680,7 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
             "partial_phoneme_applied": torch.BoolTensor(partial_phoneme_applied_list),
             "partial_phoneme_span_counts": torch.IntTensor(partial_phoneme_span_count_list),
             "partial_phoneme_token_counts": torch.IntTensor(partial_phoneme_token_count_list),
-            "partial_phoneme_word_probs": torch.FloatTensor(partial_phoneme_word_prob_list),
+            "partial_phoneme_portions": torch.FloatTensor(partial_phoneme_portion_list),
             "ipa_alignment_counts": torch.IntTensor(ipa_alignment_count_list),
             "ipa_alignment_mismatch_counts": torch.IntTensor(ipa_alignment_mismatch_count_list),
             "partial_phoneme_span_texts": partial_phoneme_span_text_list,

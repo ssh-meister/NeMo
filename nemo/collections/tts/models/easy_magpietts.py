@@ -276,7 +276,7 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
                 batch["ipa_alignment_counts"].sum(),
                 torch.tensor(batch["text"].shape[0], device=self.device),
                 active_sample_count,
-                batch["partial_phoneme_word_probs"][batch["partial_phoneme_selected"]].sum(),
+                batch["partial_phoneme_portions"][batch["partial_phoneme_selected"]].sum(),
                 batch["partial_phoneme_span_text_match_counts"][partial].sum(),
                 batch["partial_phoneme_span_token_match_counts"][partial].sum(),
                 batch["partial_phoneme_matched_token_counts"][partial].sum(),
@@ -300,7 +300,7 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             alignment_count,
             sample_count,
             active_sample_count,
-            sampled_word_prob_sum,
+            sampled_portion_sum,
             span_text_match_count,
             span_token_match_count,
             matched_input_token_count,
@@ -312,8 +312,7 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             "train/partial_phoneme/applied_fraction_of_eligible": partial_count / eligible_count.clamp_min(1),
             "train/partial_phoneme/selected_noop_fraction": (selected_count - partial_count)
             / selected_count.clamp_min(1),
-            "train/partial_phoneme/mean_sampled_word_probability": sampled_word_prob_sum
-            / selected_count.clamp_min(1),
+            "train/partial_phoneme/mean_sampled_portion": sampled_portion_sum / selected_count.clamp_min(1),
             "train/partial_phoneme/plain_control_sample_count": plain_count,
             "train/partial_phoneme/partial_sample_count": partial_count,
             "train/partial_phoneme/active_loss_sample_count": active_sample_count,
@@ -378,7 +377,7 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
                 f"dataset={batch['dataset_names'][sample_idx]} language={batch['languages'][sample_idx]} "
                 f"eligible={bool(eligible[sample_idx])} selected={bool(batch['partial_phoneme_selected'][sample_idx])} "
                 f"applied={bool(batch['partial_phoneme_applied'][sample_idx])} "
-                f"word_prob={float(batch['partial_phoneme_word_probs'][sample_idx]):.4f} "
+                f"portion={float(batch['partial_phoneme_portions'][sample_idx]):.4f} "
                 f"spans={int(batch['partial_phoneme_span_counts'][sample_idx])} "
                 f"phoneme_input_tokens={int(batch['partial_phoneme_token_counts'][sample_idx])} "
                 f"alignment_mismatches={int(batch['ipa_alignment_mismatch_counts'][sample_idx])}/"
@@ -1615,9 +1614,8 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             enable_phoneme_text_input=self.enable_phoneme_text_input,
             text_phoneme_token_offset=self.text_phoneme_token_offset,
             partial_phoneme_text_prob=self.partial_phoneme_text_prob if mode == 'train' else 0.0,
-            partial_phoneme_word_prob=self.partial_phoneme_word_prob,
-            partial_phoneme_word_prob_min=self.partial_phoneme_word_prob_min,
-            partial_phoneme_word_prob_max=self.partial_phoneme_word_prob_max,
+            partial_phoneme_portion_min=self.partial_phoneme_portion_min,
+            partial_phoneme_portion_max=self.partial_phoneme_portion_max,
             phoneme_text_bop_marker=self.phoneme_text_bop_marker,
             phoneme_text_eop_marker=self.phoneme_text_eop_marker,
             add_language_to_context_text=self.add_language_to_context_text,
