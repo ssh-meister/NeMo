@@ -32,6 +32,8 @@ from nemo.collections.common.tokenizers.text_to_speech.tts_tokenizers import (
 from nemo.collections.tts.parts.utils.tts_dataset_utils import (
     _sample_probability_range,
     beta_binomial_prior_distribution,
+    extract_phoneme_text_spans,
+    find_ordered_subsequence_ranges,
     has_phoneme_text_spans,
     normalize_volume,
     partially_phonemize_text,
@@ -300,6 +302,13 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
         partial_phoneme_word_prob_list = []
         ipa_alignment_count_list = []
         ipa_alignment_mismatch_count_list = []
+        partial_phoneme_span_text_list = []
+        partial_phoneme_span_token_list = []
+        partial_phoneme_span_text_match_count_list = []
+        partial_phoneme_span_token_match_count_list = []
+        partial_phoneme_matched_token_count_list = []
+        partial_phoneme_target_range_list = []
+        phoneme_text_list = []
 
         def _sample_context_duration_with_available_limit(available_duration_sec: float) -> float:
             effective_duration_max = min(self.context_duration_max, available_duration_sec)
@@ -572,6 +581,16 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
                     bop_marker=self.phoneme_text_bop_marker,
                     eop_marker=self.phoneme_text_eop_marker,
                 )
+            inline_phoneme_span_texts = extract_phoneme_text_spans(
+                text_for_tokens,
+                bop_marker=self.phoneme_text_bop_marker,
+                eop_marker=self.phoneme_text_eop_marker,
+            )
+            inline_phoneme_span_tokens = (
+                [self.phoneme_tokenizer.encode(span_text) for span_text in inline_phoneme_span_texts]
+                if self.phoneme_tokenizer is not None
+                else []
+            )
             text_input_list.append(text_for_tokens)
             partial_phoneme_span_count = text_for_tokens.count(self.phoneme_text_bop_marker)
             partial_phoneme_eligible_list.append(partial_phoneme_eligible)
@@ -591,6 +610,8 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
             token_list.append(tokens)
             token_len_list.append(text_len)
 
+            phoneme_text = ""
+            phoneme_channel_tokens = []
             if self.phoneme_tokenizer is not None:
                 # Use IPA text for IPABPETokenizer (required), otherwise use regular text_str
                 if isinstance(self.phoneme_tokenizer, IPABPETokenizer):
@@ -611,13 +632,36 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
                         phoneme_text = ""
                 else:
                     phoneme_text = text_str
-                phoneme_tokens = self.phoneme_tokenizer.encode(phoneme_text)
+                phoneme_channel_tokens = self.phoneme_tokenizer.encode(phoneme_text)
+                phoneme_tokens = phoneme_channel_tokens
                 phoneme_tokens = (
                     [self.phoneme_tokenizer.bos_token_id] + phoneme_tokens + [self.phoneme_tokenizer.eos_token_id]
                 )
                 phoneme_tokens_len = len(phoneme_tokens)
                 phoneme_token_list.append(torch.tensor(phoneme_tokens, dtype=torch.int32))
                 phoneme_token_len_list.append(phoneme_tokens_len)
+
+            span_text_ranges = find_ordered_subsequence_ranges(phoneme_text, inline_phoneme_span_texts)
+            span_target_ranges = find_ordered_subsequence_ranges(
+                phoneme_channel_tokens, inline_phoneme_span_tokens
+            )
+            partial_phoneme_span_text_list.append(inline_phoneme_span_texts)
+            partial_phoneme_span_token_list.append(inline_phoneme_span_tokens)
+            partial_phoneme_span_text_match_count_list.append(
+                sum(target_range is not None for target_range in span_text_ranges)
+            )
+            partial_phoneme_span_token_match_count_list.append(
+                sum(target_range is not None for target_range in span_target_ranges)
+            )
+            partial_phoneme_matched_token_count_list.append(
+                sum(
+                    len(span_tokens)
+                    for span_tokens, target_range in zip(inline_phoneme_span_tokens, span_target_ranges)
+                    if target_range is not None
+                )
+            )
+            partial_phoneme_target_range_list.append(span_target_ranges)
+            phoneme_text_list.append(phoneme_text)
 
             if self.include_align_prior:
                 align_prior = beta_binomial_prior_distribution(
@@ -646,6 +690,17 @@ class MagpieTTSLhotseDataset(torch.utils.data.Dataset):
             "partial_phoneme_word_probs": torch.FloatTensor(partial_phoneme_word_prob_list),
             "ipa_alignment_counts": torch.IntTensor(ipa_alignment_count_list),
             "ipa_alignment_mismatch_counts": torch.IntTensor(ipa_alignment_mismatch_count_list),
+            "partial_phoneme_span_texts": partial_phoneme_span_text_list,
+            "partial_phoneme_span_token_ids": partial_phoneme_span_token_list,
+            "partial_phoneme_span_text_match_counts": torch.IntTensor(
+                partial_phoneme_span_text_match_count_list
+            ),
+            "partial_phoneme_span_token_match_counts": torch.IntTensor(
+                partial_phoneme_span_token_match_count_list
+            ),
+            "partial_phoneme_matched_token_counts": torch.IntTensor(partial_phoneme_matched_token_count_list),
+            "partial_phoneme_target_ranges": partial_phoneme_target_range_list,
+            "phoneme_texts": phoneme_text_list,
         }
 
         if self.phoneme_tokenizer is not None:

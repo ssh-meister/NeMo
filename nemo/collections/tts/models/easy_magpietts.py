@@ -277,6 +277,9 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
                 torch.tensor(batch["text"].shape[0], device=self.device),
                 active_sample_count,
                 batch["partial_phoneme_word_probs"][batch["partial_phoneme_selected"]].sum(),
+                batch["partial_phoneme_span_text_match_counts"][partial].sum(),
+                batch["partial_phoneme_span_token_match_counts"][partial].sum(),
+                batch["partial_phoneme_matched_token_counts"][partial].sum(),
             ]
         ).float()
         stats = self._distributed_sum(local_stats)
@@ -298,6 +301,9 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             sample_count,
             active_sample_count,
             sampled_word_prob_sum,
+            span_text_match_count,
+            span_token_match_count,
+            matched_input_token_count,
         ) = stats
 
         metrics = {
@@ -317,6 +323,13 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
             "train/partial_phoneme/alignment_mismatch_fraction": alignment_mismatch_count
             / alignment_count.clamp_min(1),
         }
+        if span_count > 0:
+            metrics["train/partial_phoneme/span_text_target_match_fraction"] = span_text_match_count / span_count
+            metrics["train/partial_phoneme/span_token_target_match_fraction"] = span_token_match_count / span_count
+        if partial_input_token_count > 0:
+            metrics["train/partial_phoneme/input_token_target_match_fraction"] = (
+                matched_input_token_count / partial_input_token_count
+            )
         if partial_target_count > 0:
             metrics["train/phoneme_loss_partial_text"] = partial_loss_sum / partial_target_count
         if plain_target_count > 0:
@@ -340,7 +353,17 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
 
         example_indices = []
         alignment_mismatch = batch["ipa_alignment_mismatch_counts"] > 0
-        for mask in (partial, plain, alignment_mismatch):
+        mapping_mismatch = partial & (
+            (
+                batch["partial_phoneme_span_text_match_counts"]
+                < batch["partial_phoneme_span_counts"]
+            )
+            | (
+                batch["partial_phoneme_span_token_match_counts"]
+                < batch["partial_phoneme_span_counts"]
+            )
+        )
+        for mask in (mapping_mismatch, partial, plain, alignment_mismatch):
             indices = mask.nonzero(as_tuple=False).flatten()
             if indices.numel() > 0 and int(indices[0].item()) not in example_indices:
                 example_indices.append(int(indices[0].item()))
@@ -362,6 +385,24 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
                 f"{int(batch['ipa_alignment_counts'][sample_idx])} "
                 f"raw_text={raw_text[:500]!r} model_text={model_text[:500]!r} token_ids={token_ids[:100]}"
             )
+            if bool(batch["partial_phoneme_applied"][sample_idx]):
+                phoneme_len = int(batch["phoneme_tokens_lens"][sample_idx].item())
+                phoneme_target_ids = batch["phoneme_tokens"][sample_idx, 1 : phoneme_len - 1].tolist()
+                logging.info(
+                    "[PartialPhonemeMappingDebug] "
+                    f"step={self.global_step} batch_idx={batch_idx} sample_idx={sample_idx} "
+                    f"text_matches={int(batch['partial_phoneme_span_text_match_counts'][sample_idx])}/"
+                    f"{int(batch['partial_phoneme_span_counts'][sample_idx])} "
+                    f"token_matches={int(batch['partial_phoneme_span_token_match_counts'][sample_idx])}/"
+                    f"{int(batch['partial_phoneme_span_counts'][sample_idx])} "
+                    f"matched_tokens={int(batch['partial_phoneme_matched_token_counts'][sample_idx])}/"
+                    f"{int(batch['partial_phoneme_token_counts'][sample_idx])} "
+                    f"span_texts={batch['partial_phoneme_span_texts'][sample_idx][:20]!r} "
+                    f"span_token_ids={batch['partial_phoneme_span_token_ids'][sample_idx][:20]!r} "
+                    f"target_ranges={batch['partial_phoneme_target_ranges'][sample_idx][:20]!r} "
+                    f"phoneme_text={batch['phoneme_texts'][sample_idx][:500]!r} "
+                    f"phoneme_target_ids={phoneme_target_ids[:150]}"
+                )
 
     def log_val_audio_example(
         self,

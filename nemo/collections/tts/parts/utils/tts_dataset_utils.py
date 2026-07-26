@@ -152,6 +152,40 @@ def _split_text_and_phoneme_spans(
     return [(kind, segment) for kind, segment in segments if segment]
 
 
+def extract_phoneme_text_spans(
+    text: str,
+    bop_marker: str = "<bop>",
+    eop_marker: str = "<eop>",
+) -> List[str]:
+    """Return inline IPA span bodies in text order."""
+    return [
+        segment
+        for segment_type, segment in _split_text_and_phoneme_spans(
+            text, bop_marker=bop_marker, eop_marker=eop_marker
+        )
+        if segment_type == "phoneme"
+    ]
+
+
+def find_ordered_subsequence_ranges(
+    target: Sequence[Any], subsequences: Sequence[Sequence[Any]]
+) -> List[Optional[Tuple[int, int]]]:
+    """Find non-overlapping contiguous subsequences in order; unmatched entries map to None."""
+    ranges = []
+    cursor = 0
+    for subsequence in subsequences:
+        match = None
+        subsequence_len = len(subsequence)
+        if subsequence_len > 0:
+            for start in range(cursor, len(target) - subsequence_len + 1):
+                if target[start : start + subsequence_len] == subsequence:
+                    match = (start, start + subsequence_len)
+                    cursor = start + subsequence_len
+                    break
+        ranges.append(match)
+    return ranges
+
+
 def validate_ipa_alignment(text: str, ipa_alignment: Optional[List]) -> Tuple[List, int, int]:
     """Return valid alignment items plus total and invalid item counts."""
     if ipa_alignment is None:

@@ -27,7 +27,9 @@ from nemo.collections.tts.parts.utils.tts_dataset_utils import (
     _sample_probability_range,
     chunk_and_tokenize_text_by_sentence,
     chunk_text_for_inference,
+    extract_phoneme_text_spans,
     filter_dataset_by_duration,
+    find_ordered_subsequence_ranges,
     get_abs_rel_paths,
     get_audio_filepaths,
     get_tokenizer_for_language,
@@ -475,6 +477,23 @@ class TestPhonemeTextInput:
         )
 
         assert tokens == [101, 102]
+
+    @pytest.mark.run_only_on('CPU')
+    @pytest.mark.unit
+    def test_extracts_inline_phoneme_spans_in_order(self):
+        spans = extract_phoneme_text_spans("Hi <bop>ab<eop>, <bop>c<eop>!")
+
+        assert spans == ["ab", "c"]
+
+    @pytest.mark.run_only_on('CPU')
+    @pytest.mark.unit
+    def test_finds_ordered_token_subsequences(self):
+        ranges = find_ordered_subsequence_ranges(
+            target=[9, 1, 2, 8, 3, 4, 1, 2],
+            subsequences=[[1, 2], [3, 4], [1, 2], [7]],
+        )
+
+        assert ranges == [(1, 3), (4, 6), (6, 8), None]
 
     @pytest.mark.run_only_on('CPU')
     @pytest.mark.unit
