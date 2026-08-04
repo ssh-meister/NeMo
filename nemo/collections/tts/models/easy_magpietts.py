@@ -149,9 +149,18 @@ class EasyMagpieTTSModel(EasyMagpieTTSInferenceModel):
                 self._eval_asr_model.freeze()
                 self.whisper_processor = None
                 self.whisper_model = None
-            self._eval_speaker_verification_model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
-                model_name='titanet_large'
-            )
+            speaker_verification_model_path = cfg.get('speaker_verification_model_path')
+            if speaker_verification_model_path:
+                logging.info(
+                    f"Loading speaker verification model from local checkpoint: {speaker_verification_model_path}"
+                )
+                self._eval_speaker_verification_model = nemo_asr.models.EncDecSpeakerLabelModel.restore_from(
+                    restore_path=speaker_verification_model_path
+                )
+            else:
+                self._eval_speaker_verification_model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
+                    model_name='titanet_large'
+                )
             self._eval_speaker_verification_model.freeze()
             logging.info("Eval models loaded successfully.")
 
