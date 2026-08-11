@@ -20,7 +20,7 @@ import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.patches import PathPatch
 from scripts.tts_comparison_report.reporting.metrics import DistributionMetricSpec, DistributionMetricsRegistry
-from scripts.tts_comparison_report.reporting.models import BucketData, StatTestResult, Winner
+from scripts.tts_comparison_report.reporting.models import BucketData, StatTestResult
 
 
 @dataclass
@@ -54,16 +54,13 @@ class BoxPlotsConfig:
 def _style_boxplot(
     bp: dict[str, PathPatch],
     metric: DistributionMetricSpec,
-    winner_lookup: dict[str, Winner],
+    samples: list[np.ndarray],
     cfg: BoxPlotsConfig,
 ) -> None:
+    means = [values.mean() for values in samples]
+    best = min(means) if metric.lower_is_better else max(means)
     for i, patch in enumerate(bp["boxes"]):
-        winner = winner_lookup[metric.report_name]
-
-        if (i == 0 and winner == Winner.baseline) or (i == 1 and winner == Winner.candidate):
-            color = cfg.winner_model_color
-        else:
-            color = cfg.default_model_color
+        color = cfg.winner_model_color if means[i] == best else cfg.default_model_color
 
         patch.set_facecolor(color)
         patch.set_alpha(cfg.box_alpha)
@@ -73,12 +70,11 @@ def _style_boxplot(
 
 def _add_mean_ci_labels(
     ax: Axes,
-    baseline: np.ndarray,
-    candidate: np.ndarray,
+    samples: list[np.ndarray],
     metric: DistributionMetricSpec,
     cfg: BoxPlotsConfig,
 ) -> None:
-    for x, values in [(1, baseline), (2, candidate)]:
+    for x, values in enumerate(samples, start=1):
         mean, median = values.mean(), np.median(values)
         sem = values.std(ddof=1) / np.sqrt(len(values)) if len(values) > 1 else 0.0
         ci95 = 1.96 * sem
@@ -101,13 +97,12 @@ def _add_mean_ci_labels(
 def _configure_boxplot_axis(
     ax: Axes,
     metric: DistributionMetricSpec,
-    baseline_name: str,
-    candidate_name: str,
+    model_names: list[str],
     cfg: BoxPlotsConfig,
 ) -> None:
     ax.set_title(metric.report_name, fontsize=cfg.fontsize_title)
-    ax.set_xticks([1, 2])
-    ax.set_xticklabels([baseline_name, candidate_name])
+    ax.set_xticks(list(range(1, len(model_names) + 1)))
+    ax.set_xticklabels(model_names)
     ax.tick_params(axis="x", labelsize=cfg.fontsize)
     ax.tick_params(axis="y", labelsize=cfg.fontsize)
     ax.grid(True, axis="y", linestyle="dotted", alpha=cfg.grid_alpha)
@@ -123,8 +118,8 @@ def _configure_boxplot_axis(
 
 def prepare_boxplots(
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
-    stat_test_results: list[StatTestResult],
+    bucket_candidates: list[BucketData] | BucketData,
+    stat_test_results: list[StatTestResult] | dict[str, list[StatTestResult]],
     cfg: BoxPlotsConfig,
     benchmark_name: Optional[str] = None,
 ) -> BytesIO:
@@ -141,14 +136,16 @@ def prepare_boxplots(
     Returns:
         PNG image stored in an in-memory bytes buffer.
     """
-    baseline_name = bucket_baseline.name
-    candidate_name = bucket_candidate.name
-    winner_lookup = {res.metric_name: res.winner for res in stat_test_results}
+    if isinstance(bucket_candidates, BucketData):
+        bucket_candidates = [bucket_candidates]
+    buckets = [bucket_baseline, *bucket_candidates]
+    model_names = [bucket.name for bucket in buckets]
     num_rows = sum(m.add_to_box_plot for m in DistributionMetricsRegistry)
     fig_height = max(2.0 * num_rows, 4.5)
 
     with plt.rc_context({"font.family": cfg.font_family, "font.sans-serif": cfg.font_list}):
-        fig, axs = plt.subplots(num_rows, 1, figsize=(6, fig_height), squeeze=False)
+        fig_width = max(6, 1.5 * len(buckets) + 3)
+        fig, axs = plt.subplots(num_rows, 1, figsize=(fig_width, fig_height), squeeze=False)
         axs = axs.flatten()
         plot_idx = 0
 
@@ -156,23 +153,16 @@ def prepare_boxplots(
             if not metric.add_to_box_plot:
                 continue
 
-            baseline = bucket_baseline.get_metric_samples(
-                metric_name=metric.key,
-                benchmark_name=benchmark_name,
-            )
-            candidate = bucket_candidate.get_metric_samples(
-                metric_name=metric.key,
-                benchmark_name=benchmark_name,
-            )
-            baseline = np.asarray(baseline, dtype=float)
-            candidate = np.asarray(candidate, dtype=float)
+            samples = [
+                np.asarray(bucket.get_metric_samples(metric.key, benchmark_name), dtype=float) for bucket in buckets
+            ]
 
             ax = axs[plot_idx]
             plot_idx += 1
 
             bp = ax.boxplot(
-                [baseline, candidate],
-                positions=[1, 2],
+                samples,
+                positions=list(range(1, len(samples) + 1)),
                 widths=cfg.widths,
                 patch_artist=True,
                 showmeans=True,
@@ -207,9 +197,9 @@ def prepare_boxplots(
                 },
             )
 
-            _style_boxplot(bp, metric, winner_lookup, cfg)
-            _add_mean_ci_labels(ax, baseline, candidate, metric, cfg)
-            _configure_boxplot_axis(ax, metric, baseline_name, candidate_name, cfg)
+            _style_boxplot(bp, metric, samples, cfg)
+            _add_mean_ci_labels(ax, samples, metric, cfg)
+            _configure_boxplot_axis(ax, metric, model_names, cfg)
 
         fig.tight_layout(rect=[0, 0, 1, 0.985])
 

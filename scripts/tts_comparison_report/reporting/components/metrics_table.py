@@ -12,54 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import html
-from typing import Optional
 
 import numpy as np
 from scripts.tts_comparison_report.reporting.metrics import MetricSpec, MetricsRegistry
 from scripts.tts_comparison_report.reporting.models import BucketData
 
 
-def _metric_comparator(
-    a: float,
-    b: float,
-    lower_is_better: Optional[bool],
-) -> Optional[bool]:
-    if lower_is_better is None:
-        return None
-
-    if lower_is_better:
-        # If the values ​​are equal, the baseline wins.
-        return a <= b
-
-    return a >= b
-
-
-def _format_metric_values(
-    a: float,
-    b: float,
-    metric: MetricSpec,
-) -> tuple[str, str]:
-    a, b = metric.multiplier * a, metric.multiplier * b
-    a_is_better = _metric_comparator(a, b, metric.lower_is_better)
-    a, b = round(a, metric.round_digits), round(b, metric.round_digits)
-    a_str, b_str = f"{a}{metric.units}", f"{b}{metric.units}"
-
-    a_str = html.escape(a_str)
-    b_str = html.escape(b_str)
-
+def _format_metric_values(values: list[float], metric: MetricSpec) -> list[str]:
+    scaled = [metric.multiplier * value for value in values]
+    best = None
     if metric.lower_is_better is not None:
-        if a_is_better:
-            a_str = f"<strong>{a_str}</strong>"
-        else:
-            b_str = f"<strong>{b_str}</strong>"
-
-    return a_str, b_str
+        best = min(scaled) if metric.lower_is_better else max(scaled)
+    output = []
+    for value in scaled:
+        value_str = html.escape(f"{round(value, metric.round_digits)}{metric.units}")
+        output.append(f"<strong>{value_str}</strong>" if best is not None and value == best else value_str)
+    return output
 
 
 def prepare_benchmark_metrics_table_rows(
     benchmark_name: str,
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
+    bucket_candidates: list[BucketData] | BucketData,
 ) -> list[list[str]]:
     """Prepare formatted metric rows for one benchmark comparison table.
 
@@ -74,33 +48,26 @@ def prepare_benchmark_metrics_table_rows(
     Raises:
         ValueError: If a required metric is missing for the benchmark.
     """
+    if isinstance(bucket_candidates, BucketData):
+        bucket_candidates = [bucket_candidates]
+    buckets = [bucket_baseline, *bucket_candidates]
     rows = []
 
     for metric in MetricsRegistry:
-        a = bucket_baseline.get_metric_avg_value(
-            metric_name=metric.key,
-            benchmark_name=benchmark_name,
-        )
-        b = bucket_candidate.get_metric_avg_value(
-            metric_name=metric.key,
-            benchmark_name=benchmark_name,
-        )
-
-        if a is None or b is None:
+        values = [bucket.get_metric_avg_value(metric.key, benchmark_name) for bucket in buckets]
+        if any(value is None for value in values):
             if metric.optional:
                 continue
             raise ValueError(f"Unknown metric '{metric.key}' for benchmark '{benchmark_name}'.")
 
-        a_str, b_str = _format_metric_values(a, b, metric)
-
-        rows.append([html.escape(metric.report_name), a_str, b_str])
+        rows.append([html.escape(metric.report_name), *_format_metric_values(values, metric)])
 
     return rows
 
 
 def prepare_summary_metrics_table_rows(
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
+    bucket_candidates: list[BucketData] | BucketData,
 ) -> list[list[str]]:
     """Prepare formatted metric rows for the summary comparison table.
 
@@ -116,39 +83,32 @@ def prepare_summary_metrics_table_rows(
         ValueError: If a required metric is missing for any benchmark included
             in the summary.
     """
+    if isinstance(bucket_candidates, BucketData):
+        bucket_candidates = [bucket_candidates]
+    buckets = [bucket_baseline, *bucket_candidates]
     rows = []
 
     for metric in MetricsRegistry:
         if not metric.include_in_summary:
             continue
 
-        a_vals, b_vals = [], []
+        model_values: list[list[float]] = [[] for _ in buckets]
         skip = False
 
         for benchmark_name in bucket_baseline.benchmarks:
-            a = bucket_baseline.get_metric_avg_value(
-                metric_name=metric.key,
-                benchmark_name=benchmark_name,
-            )
-            b = bucket_candidate.get_metric_avg_value(
-                metric_name=metric.key,
-                benchmark_name=benchmark_name,
-            )
-
-            if a is None or b is None:
+            values = [bucket.get_metric_avg_value(metric.key, benchmark_name) for bucket in buckets]
+            if any(value is None for value in values):
                 if metric.optional:
                     skip = True
                     break
                 raise ValueError(f"Unknown metric '{metric.key}' for benchmark '{benchmark_name}'.")
-
-            a_vals.append(a)
-            b_vals.append(b)
+            for model_metric_values, value in zip(model_values, values):
+                model_metric_values.append(value)
 
         if skip:
             continue
 
-        avg_a, avg_b = np.mean(a_vals), np.mean(b_vals)
-        a_str, b_str = _format_metric_values(avg_a, avg_b, metric)
-        rows.append([html.escape(metric.report_name), a_str, b_str])
+        averages = [float(np.mean(values)) for values in model_values]
+        rows.append([html.escape(metric.report_name), *_format_metric_values(averages, metric)])
 
     return rows

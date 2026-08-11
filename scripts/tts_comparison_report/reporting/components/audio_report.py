@@ -23,46 +23,57 @@ _RNG = random.Random(SEED)
 def _collect_audio_pairs(
     benchmark_name: str,
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
+    bucket_candidates: list[BucketData],
     bucket_structure: BucketStructure,
 ) -> list[AudioPair]:
     baseline_paths = bucket_baseline.get_benchmark_audio_paths(benchmark_name)
-    candidate_paths = bucket_candidate.get_benchmark_audio_paths(benchmark_name)
     baseline_meta = bucket_baseline.get_benchmark_sample_meta(benchmark_name, bucket_structure)
-    candidate_meta = bucket_candidate.get_benchmark_sample_meta(benchmark_name, bucket_structure)
+    candidate_paths = [bucket.get_benchmark_audio_paths(benchmark_name) for bucket in bucket_candidates]
+    candidate_meta = [
+        bucket.get_benchmark_sample_meta(benchmark_name, bucket_structure) for bucket in bucket_candidates
+    ]
     pairs = []
 
-    if set(baseline_paths) != set(candidate_paths):
-        raise ValueError(f"Audio sample sets differ for benchmark '{benchmark_name}'.")
+    for bucket, paths in zip(bucket_candidates, candidate_paths):
+        if set(baseline_paths) != set(paths):
+            raise ValueError(
+                f"Audio sample sets differ for benchmark '{benchmark_name}' between "
+                f"'{bucket_baseline.name}' and '{bucket.name}'."
+            )
 
     for name in baseline_paths:
-        if name not in candidate_paths or name not in baseline_meta or name not in candidate_meta:
+        if name not in baseline_meta or any(
+            name not in paths or name not in meta for paths, meta in zip(candidate_paths, candidate_meta)
+        ):
             raise ValueError(
                 f"Missing matched sample '{name}' in audio paths or metadata for benchmark '{benchmark_name}'."
             )
 
-        if baseline_meta[name].sample_id != candidate_meta[name].sample_id:
-            raise ValueError(
-                f"Sample id mismatch for '{name}' in benchmark '{benchmark_name}'. "
-                "Probably you use different versions of buckets."
-            )
+        for bucket, meta in zip(bucket_candidates, candidate_meta):
+            if baseline_meta[name].sample_id != meta[name].sample_id:
+                raise ValueError(
+                    f"Sample id mismatch for '{name}' in benchmark '{benchmark_name}' "
+                    f"between '{bucket_baseline.name}' and '{bucket.name}'."
+                )
 
         pair = AudioPair(
             context_path=baseline_meta[name].context_path,
-            baseline_path=baseline_paths[name],
-            candidate_path=candidate_paths[name],
+            model_paths={
+                bucket_baseline.name: baseline_paths[name],
+                **{bucket.name: paths[name] for bucket, paths in zip(bucket_candidates, candidate_paths)},
+            },
             text=baseline_meta[name].gt_text,
         )
         pairs.append(pair)
 
-    pairs.sort(key=lambda p: p.baseline_path.stem)
+    pairs.sort(key=lambda p: p.model_paths[bucket_baseline.name].stem)
 
     return pairs
 
 
 def prepare_audio_pairs(
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
+    bucket_candidates: list[BucketData] | BucketData,
     bucket_structure: BucketStructure,
     used_benchmarks: list[str],
     samples_per_benchmark: int,
@@ -81,10 +92,12 @@ def prepare_audio_pairs(
     Raises:
         ValueError: If benchmark audio sets or sample metadata are inconsistent.
     """
+    if isinstance(bucket_candidates, BucketData):
+        bucket_candidates = [bucket_candidates]
     pairs = {}
 
     for benchmark_name in used_benchmarks:
-        benchmark_pairs = _collect_audio_pairs(benchmark_name, bucket_baseline, bucket_candidate, bucket_structure)
+        benchmark_pairs = _collect_audio_pairs(benchmark_name, bucket_baseline, bucket_candidates, bucket_structure)
         sampled_pairs = _RNG.sample(benchmark_pairs, k=min(samples_per_benchmark, len(benchmark_pairs)))
 
         if len(sampled_pairs) < samples_per_benchmark:

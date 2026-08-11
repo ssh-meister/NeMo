@@ -1,7 +1,8 @@
 <h1>Audio Comparison Report</h1>
 <p class="subtitle">
   Comparing baseline <strong class="strong-muted">{{ baseline_name }}</strong>
-  against candidate <strong class="strong-muted">{{ candidate_name }}</strong>
+  against candidate{% if candidate_names|length != 1 %}s{% endif %}
+  {% for candidate_name in candidate_names %}<strong class="strong-muted">{{ candidate_name }}</strong>{% if not loop.last %}, {% endif %}{% endfor %}
 </p>
 <p class="expiration_comment">
   {{ expiration_comment }}

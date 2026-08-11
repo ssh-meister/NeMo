@@ -1,11 +1,8 @@
 <div class="card">
+{% for model_name, configuration in configurations %}
   <div class="sub-card">
-    <h4>{{ baseline_name }}</h4>
-    <p><span class="config-text">{{ baseline_configuration }}</span></p>
+    <h4>{{ model_name }}</h4>
+    <p><span class="config-text">{{ configuration }}</span></p>
   </div>
-
-  <div class="sub-card">
-    <h4>{{ candidate_name }}</h4>
-    <p><span class="config-text">{{ candidate_configuration }}</span></p>
-  </div>
+{% endfor %}
 </div>

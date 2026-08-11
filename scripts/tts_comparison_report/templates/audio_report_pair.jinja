@@ -5,16 +5,13 @@
       <source src="{{ context_url }}" type="audio/wav">
       </audio>
     </div>
+  {% for model_name, model_url in model_urls.items() %}
     <div class="audio-cell">
       <audio controls preload="metadata">
-      <source src="{{ baseline_url }}" type="audio/wav">
+      <source src="{{ model_url }}" type="audio/wav">
       </audio>
     </div>
-    <div class="audio-cell">
-      <audio controls preload="metadata">
-      <source src="{{ candidate_url }}" type="audio/wav">
-      </audio>
-    </div>
+  {% endfor %}
   </div>
   <p class="pair-comment">
     Text: {{ text }}

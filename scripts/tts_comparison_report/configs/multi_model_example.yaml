@@ -1,0 +1,37 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+# Licensed under the Apache License, Version 2.0.
+models:
+  baseline:
+    name: Baseline
+    path: ${oc.env:EXPERIMENT_ROOT}/baseline
+  candidates:
+    - name: Candidate A
+      path: ${oc.env:EXPERIMENT_ROOT}/candidate_a
+    - name: Candidate B
+      path: ${oc.env:EXPERIMENT_ROOT}/candidate_b
+
+evaluation:
+  benchmarks:
+    - libritts_test_clean
+    - riva_hard_digits
+    - riva_hard_letters
+  results_subdir: results
+
+report:
+  audio: true
+  audio_benchmarks:
+    - libritts_test_clean
+    - riva_hard_digits
+  samples_per_benchmark: 20
+
+storage:
+  endpoint: https://your-s3-endpoint
+  bucket: your_bucket_name
+  region: us-west-2
+
+task_id: NEMOTTS-2007
+
+# Uncomment both fields to read evaluation buckets over SFTP.
+# remote:
+#   hostname: your_remote_host
+#   username: your_user

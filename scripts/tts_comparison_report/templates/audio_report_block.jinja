@@ -4,12 +4,11 @@
     <div class="model-header">
       Context
     </div>
+  {% for model_name in model_names %}
     <div class="model-header">
-      {{ baseline_name }}
+      {{ model_name }}
     </div>
-    <div class="model-header">
-      {{ candidate_name }}
-    </div>
+  {% endfor %}
   </div>
 
 {% for block in pair_blocks %}

@@ -26,7 +26,7 @@ from scripts.tts_comparison_report.reporting.models import BucketData, EvalArtif
 
 def prepare_eval_artifacts(
     bucket_baseline: BucketData,
-    bucket_candidate: BucketData,
+    bucket_candidates: list[BucketData] | BucketData,
     box_plots_cfg: BoxPlotsConfig,
 ) -> EvalArtifacts:
     """Prepare summary and benchmark-level evaluation artifacts for report rendering.
@@ -40,43 +40,58 @@ def prepare_eval_artifacts(
         Evaluation artifacts containing configuration metadata, summary results,
         and per-benchmark results.
     """
+    if isinstance(bucket_candidates, BucketData):
+        bucket_candidates = [bucket_candidates]
     baseline_name = bucket_baseline.name
-    candidate_name = bucket_candidate.name
-    is_self_comparison = bucket_baseline.path == bucket_candidate.path
+    is_self_comparison = any(bucket_baseline.path == bucket.path for bucket in bucket_candidates)
 
-    metrics_table_row = prepare_summary_metrics_table_rows(bucket_baseline, bucket_candidate)
-    stat_test_results = run_stat_tests(bucket_baseline, bucket_candidate)
-    stat_test_table_row = prepare_stat_tests_table_rows(baseline_name, candidate_name, stat_test_results)
-    stat_tests_analysis_info = prepare_stat_tests_analysis_info(baseline_name, candidate_name, stat_test_results)
+    metrics_table_row = prepare_summary_metrics_table_rows(bucket_baseline, bucket_candidates)
+    stat_test_results = {bucket.name: run_stat_tests(bucket_baseline, bucket) for bucket in bucket_candidates}
+    stat_test_table_rows = {
+        bucket.name: prepare_stat_tests_table_rows(baseline_name, bucket.name, stat_test_results[bucket.name])
+        for bucket in bucket_candidates
+    }
+    stat_tests_analysis_info = {
+        bucket.name: prepare_stat_tests_analysis_info(baseline_name, bucket.name, stat_test_results[bucket.name])
+        for bucket in bucket_candidates
+    }
 
     box_plots = prepare_boxplots(
         bucket_baseline=bucket_baseline,
-        bucket_candidate=bucket_candidate,
+        bucket_candidates=bucket_candidates,
         stat_test_results=stat_test_results,
         cfg=box_plots_cfg,
     )
 
     configuration = ModelConfiguration(
         baseline=bucket_baseline.configuration_str,
-        candidate=bucket_candidate.configuration_str,
+        candidates={bucket.name: bucket.configuration_str for bucket in bucket_candidates},
     )
     summary = EvalResult(
         metrics_table_row=metrics_table_row,
-        stat_test_table_row=stat_test_table_row,
+        stat_test_table_rows=stat_test_table_rows,
         stat_tests_analysis_info=stat_tests_analysis_info,
         box_plots=box_plots,
     )
     benchmarks = {}
 
     for benchmark_name in bucket_baseline.benchmarks:
-        metrics_table_row = prepare_benchmark_metrics_table_rows(benchmark_name, bucket_baseline, bucket_candidate)
-        stat_test_results = run_stat_tests(bucket_baseline, bucket_candidate, benchmark_name)
-        stat_test_table_row = prepare_stat_tests_table_rows(baseline_name, candidate_name, stat_test_results)
-        stat_tests_analysis_info = prepare_stat_tests_analysis_info(baseline_name, candidate_name, stat_test_results)
+        metrics_table_row = prepare_benchmark_metrics_table_rows(benchmark_name, bucket_baseline, bucket_candidates)
+        stat_test_results = {
+            bucket.name: run_stat_tests(bucket_baseline, bucket, benchmark_name) for bucket in bucket_candidates
+        }
+        stat_test_table_rows = {
+            bucket.name: prepare_stat_tests_table_rows(baseline_name, bucket.name, stat_test_results[bucket.name])
+            for bucket in bucket_candidates
+        }
+        stat_tests_analysis_info = {
+            bucket.name: prepare_stat_tests_analysis_info(baseline_name, bucket.name, stat_test_results[bucket.name])
+            for bucket in bucket_candidates
+        }
 
         box_plots = prepare_boxplots(
             bucket_baseline=bucket_baseline,
-            bucket_candidate=bucket_candidate,
+            bucket_candidates=bucket_candidates,
             stat_test_results=stat_test_results,
             cfg=box_plots_cfg,
             benchmark_name=benchmark_name,
@@ -84,7 +99,7 @@ def prepare_eval_artifacts(
 
         benchmarks[benchmark_name] = EvalResult(
             metrics_table_row=metrics_table_row,
-            stat_test_table_row=stat_test_table_row,
+            stat_test_table_rows=stat_test_table_rows,
             stat_tests_analysis_info=stat_tests_analysis_info,
             box_plots=box_plots,
         )

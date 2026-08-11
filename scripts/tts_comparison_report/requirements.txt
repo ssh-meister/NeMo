@@ -5,3 +5,4 @@ paramiko
 tqdm
 jinja2
 boto3
+omegaconf

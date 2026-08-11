@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import re
 from io import BytesIO
 from logging import Logger
 from pathlib import Path
@@ -70,12 +71,11 @@ class Orchestrator:
     def _load_buckets(
         self,
         baseline_name: str,
-        candidate_name: str,
         baseline_path: Path,
-        candidate_path: Path,
+        candidates: list[tuple[str, Path]],
         benchmark_names: tuple[str, ...],
         check_audio: bool,
-    ) -> tuple[BucketData, BucketData]:
+    ) -> tuple[BucketData, list[BucketData]]:
         self._log_info(f"\nLoading metadata for {baseline_name}...")
         bucket_baseline = BucketData.from_storage(
             bucket_name=baseline_name,
@@ -85,29 +85,38 @@ class Orchestrator:
             check_audio=check_audio,
             storage=self.storage,
         )
-        self._log_info(f"Loading metadata for {candidate_name}...")
-        bucket_candidate = BucketData.from_storage(
-            bucket_name=candidate_name,
-            bucket_path=candidate_path,
-            bucket_structure=self.bucket_structure,
-            benchmark_names=benchmark_names,
-            check_audio=check_audio,
-            storage=self.storage,
-        )
-
         baseline_set = set(bucket_baseline.benchmarks.keys())
-        candidate_set = set(bucket_candidate.benchmarks.keys())
-
-        if baseline_set != candidate_set:
-            raise ValueError(f"Benchmark sets differ: '{baseline_set}' vs '{candidate_set}'.")
-
+        expected_set = set(benchmark_names)
+        if baseline_set != expected_set:
+            raise ValueError(
+                f"Baseline benchmark set differs from requested benchmarks: "
+                f"found '{baseline_set}', expected '{expected_set}'."
+            )
         self._log_info(f"\nLoading metric data for {baseline_name}:")
         bucket_baseline.load_metrics(storage=self.storage, show_pbar=self.show_pbar)
 
-        self._log_info(f"\nLoading metric data for {candidate_name}:")
-        bucket_candidate.load_metrics(storage=self.storage, show_pbar=self.show_pbar)
+        bucket_candidates = []
+        for candidate_name, candidate_path in candidates:
+            self._log_info(f"Loading metadata for {candidate_name}...")
+            bucket_candidate = BucketData.from_storage(
+                bucket_name=candidate_name,
+                bucket_path=candidate_path,
+                bucket_structure=self.bucket_structure,
+                benchmark_names=benchmark_names,
+                check_audio=check_audio,
+                storage=self.storage,
+            )
+            candidate_set = set(bucket_candidate.benchmarks.keys())
+            if baseline_set != candidate_set:
+                raise ValueError(
+                    f"Benchmark sets differ for '{baseline_name}' and '{candidate_name}': "
+                    f"'{baseline_set}' vs '{candidate_set}'."
+                )
+            self._log_info(f"\nLoading metric data for {candidate_name}:")
+            bucket_candidate.load_metrics(storage=self.storage, show_pbar=self.show_pbar)
+            bucket_candidates.append(bucket_candidate)
 
-        return bucket_baseline, bucket_candidate
+        return bucket_baseline, bucket_candidates
 
     def _upload_audio_file(
         self,
@@ -154,18 +163,18 @@ class Orchestrator:
                     path=pair.context_path,
                     key=f"{s3_prefix}/{S3_AUDIO_DIR}/context_{benchmark_name}_{i}.wav",
                 )
-                baseline_url = self._upload_audio_file(
-                    path=pair.baseline_path,
-                    key=f"{s3_prefix}/{S3_AUDIO_DIR}/baseline_{benchmark_name}_{i}.wav",
-                )
-                candidate_url = self._upload_audio_file(
-                    path=pair.candidate_path,
-                    key=f"{s3_prefix}/{S3_AUDIO_DIR}/candidate_{benchmark_name}_{i}.wav",
-                )
+                model_urls = {}
+                for model_index, (model_name, model_path) in enumerate(pair.model_paths.items()):
+                    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", model_name).strip("-._") or "model"
+                    model_urls[model_name] = self._upload_audio_file(
+                        path=model_path,
+                        key=(
+                            f"{s3_prefix}/{S3_AUDIO_DIR}/model-{model_index}-{safe_name}_" f"{benchmark_name}_{i}.wav"
+                        ),
+                    )
                 pair_info = UploadedAudioPairInfo(
                     context_url=context_url,
-                    baseline_url=baseline_url,
-                    candidate_url=candidate_url,
+                    model_urls=model_urls,
                     text=pair.text,
                 )
                 benchmark_info.append(pair_info)
@@ -230,7 +239,7 @@ class Orchestrator:
     def _render_audio_report(
         self,
         baseline_name: str,
-        candidate_name: str,
+        candidate_names: list[str],
         used_benchmarks: list[str],
         uploaded_audio_info: dict[str, list[UploadedAudioPairInfo]],
         task_info: TaskInfo,
@@ -241,7 +250,7 @@ class Orchestrator:
         header_block = self.renderer.render(
             name=TemplateName.audio_report_header,
             baseline_name=baseline_name,
-            candidate_name=candidate_name,
+            candidate_names=candidate_names,
             expiration_comment=expiration_comment,
         )
         benchmark_blocks, benchmark_section_info = [], []
@@ -253,8 +262,7 @@ class Orchestrator:
                 block = self.renderer.render(
                     name=TemplateName.audio_report_pair,
                     context_url=pair.context_url,
-                    baseline_url=pair.baseline_url,
-                    candidate_url=pair.candidate_url,
+                    model_urls=pair.model_urls,
                     text=pair.text,
                 )
                 pair_blocks.append(block)
@@ -264,7 +272,8 @@ class Orchestrator:
                 title=benchmark_name,
                 section_id=benchmark_name,
                 baseline_name=baseline_name,
-                candidate_name=candidate_name,
+                candidate_names=candidate_names,
+                model_names=[baseline_name, *candidate_names],
                 pair_blocks=pair_blocks,
             )
             benchmark_blocks.append(block)
@@ -284,7 +293,7 @@ class Orchestrator:
     def _render_eval_report(
         self,
         baseline_name: str,
-        candidate_name: str,
+        candidate_names: list[str],
         eval_artifacts: EvalArtifacts,
         uploaded_box_plots_info: UploadedBoxPlotsInfo,
         task_info: TaskInfo,
@@ -295,34 +304,41 @@ class Orchestrator:
 
         configuration_block = self.renderer.render(
             name=TemplateName.eval_report_configuration,
-            baseline_name=baseline_name,
-            baseline_configuration=eval_artifacts.configuration.baseline,
-            candidate_name=candidate_name,
-            candidate_configuration=eval_artifacts.configuration.candidate,
+            configurations=[
+                (baseline_name, eval_artifacts.configuration.baseline),
+                *[
+                    (candidate_name, eval_artifacts.configuration.candidates[candidate_name])
+                    for candidate_name in candidate_names
+                ],
+            ],
         )
         header_block = self.renderer.render(
             name=TemplateName.eval_report_header,
             baseline_name=baseline_name,
-            candidate_name=candidate_name,
+            candidate_names=candidate_names,
             expiration_comment=expiration_comment,
         )
         metrics_table = self.renderer.render(
             name=TemplateName.eval_report_table,
             title="Metrics (macro-average across benchmarks)",
-            headers=["Metric", baseline_name, candidate_name],
+            headers=["Metric", baseline_name, *candidate_names],
             rows=eval_artifacts.summary.metrics_table_row,
         )
-        stat_tests_table = self.renderer.render(
-            name=TemplateName.eval_report_table,
-            title="Statistical Tests (pooled filewise across benchmarks)",
-            headers=["Metric", "Winner", "Alternative", "p-value"],
-            rows=eval_artifacts.summary.stat_test_table_row,
-        )
-        stat_tests_analysis = self.renderer.render(
-            name=TemplateName.eval_report_stat_analysis,
-            winner=eval_artifacts.summary.stat_tests_analysis_info.winner,
-            advantages=eval_artifacts.summary.stat_tests_analysis_info.advantages,
-        )
+        stat_tests_table, stat_tests_analysis = "", ""
+        for candidate_name in candidate_names:
+            stat_tests_table += self.renderer.render(
+                name=TemplateName.eval_report_table,
+                title=f"Statistical Tests: {candidate_name} vs {baseline_name} (pooled filewise)",
+                headers=["Metric", "Winner", "Alternative", "p-value"],
+                rows=eval_artifacts.summary.stat_test_table_rows[candidate_name],
+            )
+            info = eval_artifacts.summary.stat_tests_analysis_info[candidate_name]
+            stat_tests_analysis += self.renderer.render(
+                name=TemplateName.eval_report_stat_analysis,
+                comparison=f"{candidate_name} vs {baseline_name}",
+                winner=info.winner,
+                advantages=info.advantages,
+            )
         image_block = self.renderer.render(
             name=TemplateName.eval_report_image,
             image_url=uploaded_box_plots_info.summary_url,
@@ -341,20 +357,24 @@ class Orchestrator:
             metrics_table = self.renderer.render(
                 name=TemplateName.eval_report_table,
                 title="Metrics",
-                headers=["Metric", baseline_name, candidate_name],
+                headers=["Metric", baseline_name, *candidate_names],
                 rows=eval_artifacts.benchmarks[benchmark_name].metrics_table_row,
             )
-            stat_tests_table = self.renderer.render(
-                name=TemplateName.eval_report_table,
-                title="Statistical Tests",
-                headers=["Metric", "Winner", "Alternative", "p-value"],
-                rows=eval_artifacts.benchmarks[benchmark_name].stat_test_table_row,
-            )
-            stat_tests_analysis = self.renderer.render(
-                name=TemplateName.eval_report_stat_analysis,
-                winner=eval_artifacts.benchmarks[benchmark_name].stat_tests_analysis_info.winner,
-                advantages=eval_artifacts.benchmarks[benchmark_name].stat_tests_analysis_info.advantages,
-            )
+            stat_tests_table, stat_tests_analysis = "", ""
+            for candidate_name in candidate_names:
+                stat_tests_table += self.renderer.render(
+                    name=TemplateName.eval_report_table,
+                    title=f"Statistical Tests: {candidate_name} vs {baseline_name}",
+                    headers=["Metric", "Winner", "Alternative", "p-value"],
+                    rows=eval_artifacts.benchmarks[benchmark_name].stat_test_table_rows[candidate_name],
+                )
+                info = eval_artifacts.benchmarks[benchmark_name].stat_tests_analysis_info[candidate_name]
+                stat_tests_analysis += self.renderer.render(
+                    name=TemplateName.eval_report_stat_analysis,
+                    comparison=f"{candidate_name} vs {baseline_name}",
+                    winner=info.winner,
+                    advantages=info.advantages,
+                )
             image_block = self.renderer.render(
                 name=TemplateName.eval_report_image,
                 image_url=uploaded_box_plots_info.benchmark_urls[benchmark_name],
@@ -389,9 +409,8 @@ class Orchestrator:
     def run(
         self,
         baseline_name: str,
-        candidate_name: str,
         baseline_path: Path,
-        candidate_path: Path,
+        candidates: list[tuple[str, Path]],
         benchmarks: list[str],
         generate_audio_report: bool,
         audio_report_benchmarks: Optional[list[str]],
@@ -430,24 +449,27 @@ class Orchestrator:
         audio_report: Optional[str] = None
         audio_report_url: Optional[str] = None
 
-        bucket_baseline, bucket_candidate = self._load_buckets(
+        if not candidates:
+            raise ValueError("At least one candidate model is required.")
+        bucket_baseline, bucket_candidates = self._load_buckets(
             baseline_name=baseline_name,
-            candidate_name=candidate_name,
             baseline_path=baseline_path,
-            candidate_path=candidate_path,
+            candidates=candidates,
             benchmark_names=benchmark_names,
             check_audio=generate_audio_report,
         )
 
         task_info = make_task_info(task_id)
         expiration_info = make_expiration_info(S3_LINK_EXPIRES_IN)
-        s3_prefix = generate_s3_prefix(baseline_path, candidate_path, task_info, expiration_info)
+        s3_prefix = generate_s3_prefix(
+            baseline_path, [candidate_path for _, candidate_path in candidates], task_info, expiration_info
+        )
         box_plots_cfg = BoxPlotsConfig()
 
         self._log_info("\nPreparing evaluation artifacts...")
         eval_artifacts = prepare_eval_artifacts(
             bucket_baseline=bucket_baseline,
-            bucket_candidate=bucket_candidate,
+            bucket_candidates=bucket_candidates,
             box_plots_cfg=box_plots_cfg,
         )
         self._log_info("\nUploading images to S3:")
@@ -462,7 +484,7 @@ class Orchestrator:
 
             audio_pairs = prepare_audio_pairs(
                 bucket_baseline=bucket_baseline,
-                bucket_candidate=bucket_candidate,
+                bucket_candidates=bucket_candidates,
                 bucket_structure=self.bucket_structure,
                 used_benchmarks=audio_report_benchmarks,
                 samples_per_benchmark=samples_per_benchmark,
@@ -476,7 +498,7 @@ class Orchestrator:
             self._log_info("\nPreparing audio report...")
             audio_report = self._render_audio_report(
                 baseline_name=baseline_name,
-                candidate_name=candidate_name,
+                candidate_names=[name for name, _ in candidates],
                 used_benchmarks=audio_report_benchmarks,
                 uploaded_audio_info=uploaded_audio_info,
                 task_info=task_info,
@@ -491,7 +513,7 @@ class Orchestrator:
         self._log_info("\nPreparing evaluation report...")
         eval_report = self._render_eval_report(
             baseline_name=bucket_baseline.name,
-            candidate_name=bucket_candidate.name,
+            candidate_names=[bucket.name for bucket in bucket_candidates],
             eval_artifacts=eval_artifacts,
             uploaded_box_plots_info=uploaded_box_plots_info,
             task_info=task_info,

@@ -16,12 +16,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Self
+from typing import Any, Optional
 
 from scripts.tts_comparison_report.reporting.constants import TQDM_NCOLS
 from scripts.tts_comparison_report.reporting.storage import BaseStorage
 from tqdm import tqdm
-
+from typing_extensions import Self
 
 _REQUIRED_SAMPLE_ID_KEYS: list[str] = [
     "pred_audio_filepath",
@@ -582,17 +582,17 @@ class EvalResult:
     """Evaluation results for one report section, including tables, analysis, and plot."""
 
     metrics_table_row: list[str | float]
-    stat_test_table_row: list[str | float]
-    stat_tests_analysis_info: StatTestAnalysisInfo
+    stat_test_table_rows: dict[str, list[list[str]]]
+    stat_tests_analysis_info: dict[str, StatTestAnalysisInfo]
     box_plots: BytesIO
 
 
 @dataclass(frozen=True)
 class ModelConfiguration:
-    """Configuration strings associated with the baseline and candidate models."""
+    """Configuration strings associated with all compared models."""
 
     baseline: str
-    candidate: str
+    candidates: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -615,19 +615,17 @@ class UploadedBoxPlotsInfo:
 
 @dataclass(frozen=True)
 class AudioPair:
-    """Matched context, baseline, and candidate audio files for one sample."""
+    """Matched context and generated audio files for one sample."""
 
     context_path: Path
-    baseline_path: Path
-    candidate_path: Path
+    model_paths: dict[str, Path]
     text: str
 
 
 @dataclass(frozen=True)
 class UploadedAudioPairInfo:
-    """Uploaded context, baseline, and candidate audio URLs for one sample."""
+    """Uploaded context and generated audio URLs for one sample."""
 
     context_url: str
-    baseline_url: str
-    candidate_url: str
+    model_urls: dict[str, str]
     text: str

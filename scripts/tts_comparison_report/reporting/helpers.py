@@ -11,7 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from datetime import UTC, datetime, timedelta
+import hashlib
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from scripts.tts_comparison_report.reporting.constants import DUMMY_TASK_ID, JIRA_TICKET_URL_PREFIX
@@ -27,7 +29,7 @@ def make_expiration_info(expires_in: int) -> ExpirationInfo:
     Returns:
         Expiration information with Unix timestamp and formatted string values.
     """
-    expires_at = datetime.now(UTC) + timedelta(seconds=expires_in)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
     return ExpirationInfo(
         timestamp=int(expires_at.timestamp()),
@@ -57,7 +59,7 @@ def make_task_info(task_id: str) -> TaskInfo:
 
 def generate_s3_prefix(
     baseline_path: Path,
-    candidate_path: Path,
+    candidate_path: Path | list[Path],
     task_info: TaskInfo,
     expiration_info: ExpirationInfo,
 ) -> str:
@@ -72,9 +74,13 @@ def generate_s3_prefix(
     Returns:
         S3 key prefix for uploaded report artifacts.
     """
-    parts = [
-        task_info.task_id,
-        f"{baseline_path.stem}_vs_{candidate_path.stem}",
-        expiration_info.path_str,
-    ]
+    candidate_paths = [candidate_path] if isinstance(candidate_path, Path) else candidate_path
+    all_paths = [baseline_path, *candidate_paths]
+
+    def safe(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._") or "model"
+
+    comparison = f"{safe(baseline_path.stem)}_vs_" + "_and_".join(safe(path.stem) for path in candidate_paths)
+    digest = hashlib.sha256("\0".join(path.as_posix() for path in all_paths).encode()).hexdigest()[:12]
+    parts = [safe(task_info.task_id), f"{comparison}-{digest}", expiration_info.path_str]
     return "-".join(parts)

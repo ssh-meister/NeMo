@@ -2,7 +2,8 @@
 
 This tool generates HTML comparison reports for TTS evaluation buckets and uploads them to S3.
 
-The `generate_report` script compares two evaluation buckets produced by `magpietts_inference` and generates:
+The `generate_report` script compares one baseline with one or more candidate evaluation buckets produced by
+`magpietts_inference` and generates:
 1. an HTML evaluation report with aggregated and per-benchmark metrics;
 2. an optional HTML audio comparison report with side-by-side audio samples.
 
@@ -93,6 +94,61 @@ export REMOTE_PASSWORD='your_ssh_password'
 ```
 
 ## Usage examples
+
+### YAML configuration (recommended)
+
+The primary interface is an OmegaConf YAML file. See
+`configs/multi_model_example.yaml` for a complete example:
+
+```bash
+export EXPERIMENT_ROOT=/workspace/NeMo/exp/buckets
+python scripts/tts_comparison_report/generate_report.py \
+  --config scripts/tts_comparison_report/configs/multi_model_example.yaml
+```
+
+The schema is:
+
+```yaml
+models:
+  baseline: {name: Baseline, path: /path/to/baseline}
+  candidates:
+    - {name: Candidate A, path: /path/to/candidate_a}
+evaluation:
+  benchmarks: [libritts_test_clean]
+  results_subdir: results
+report:
+  audio: false
+  audio_benchmarks: [libritts_test_clean]
+  samples_per_benchmark: 30
+storage:
+  endpoint: https://your-s3-endpoint
+  bucket: your-bucket
+  region: us-west-2
+task_id: NEMOTTS-2007
+remote:  # optional; hostname and username must be supplied together
+  hostname: host
+  username: user
+```
+
+OmegaConf interpolation, including `${oc.env:VARIABLE}`, is resolved before validation and use. Trailing
+Hydra-style dotlist overrides are applied last:
+
+```bash
+python scripts/tts_comparison_report/generate_report.py \
+  --config report.yaml report.audio=true report.samples_per_benchmark=10
+```
+
+Do not put credentials in YAML. `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, and (for remote access)
+`REMOTE_PASSWORD` are read only from environment variables.
+
+The report has one metric column and one box per model. Best metric values are emphasized. Mann-Whitney U
+tests are run independently for every candidate against the baseline; they are not candidate-to-candidate
+tests. The optional audio report uses one horizontally scrollable context/baseline/all-candidates grid.
+
+### Legacy single-candidate CLI
+
+The existing flags remain supported unchanged for one baseline and one candidate. `--config` cannot be
+combined with any legacy flag; use dotlist overrides when running from YAML.
 
 To generate and upload only the evaluation report from local buckets, run:
 

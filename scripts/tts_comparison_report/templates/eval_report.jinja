@@ -236,7 +236,8 @@
     table {
       width: 100%;
       border-collapse: collapse;
-      table-layout: fixed;
+      table-layout: auto;
+      min-width: max-content;
       margin-top: 0.75rem;
       margin-bottom: 1rem;
       background: white;
@@ -250,6 +251,11 @@
       text-align: left;
       vertical-align: top;
       overflow-wrap: anywhere;
+      min-width: 150px;
+    }
+
+    th:first-child, td:first-child {
+      min-width: 210px;
     }
 
     th {
