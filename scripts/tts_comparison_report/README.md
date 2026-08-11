@@ -95,6 +95,10 @@ export REMOTE_PASSWORD='your_ssh_password'
 
 ## Usage examples
 
+For the checked-in MagpieTTS v2607 versus three EasyMagpie evaluation matrix, including the current English
+benchmark names, direct canonical dataset access, and separate English/multilingual reports, see
+`scripts/tts_eval_suite/README.md`.
+
 ### YAML configuration (recommended)
 
 The primary interface is an OmegaConf YAML file. See

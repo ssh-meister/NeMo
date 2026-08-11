@@ -229,7 +229,11 @@ def compute_utmosv2_scores(audio_dir, device):
 
 
 def load_evaluation_models(
-    sv_model_type="titanet", asr_model_name="stt_en_conformer_transducer_large", asr_model_type="nemo", device="cuda"
+    sv_model_type="titanet",
+    asr_model_name="stt_en_conformer_transducer_large",
+    asr_model_type="nemo",
+    device="cuda",
+    sv_model_path=None,
 ):
     """Load ASR and speaker verification models used for evaluation.
 
@@ -262,9 +266,14 @@ def load_evaluation_models(
         models['feature_extractor'] = Wav2Vec2FeatureExtractor.from_pretrained('microsoft/wavlm-base-plus-sv')
         models['sv_model'] = WavLMForXVector.from_pretrained('microsoft/wavlm-base-plus-sv').to(device).eval()
     else:
-        models['sv_model'] = (
-            nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(model_name='titanet_large').to(device).eval()
-        )
+        if sv_model_path:
+            models['sv_model'] = (
+                nemo_asr.models.EncDecSpeakerLabelModel.restore_from(restore_path=sv_model_path).to(device).eval()
+            )
+        else:
+            models['sv_model'] = (
+                nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(model_name='titanet_large').to(device).eval()
+            )
 
     logging.info("Loading `titanet_small` model...")
     with logging.temp_verbosity(logging.ERROR):
@@ -302,6 +311,7 @@ def evaluate_dir(
     generated_audio_dir,
     language="en",
     sv_model_type="titanet",
+    sv_model_path=None,
     asr_model_name="stt_en_conformer_transducer_large",
     asr_model_type="nemo",
     with_utmosv2=True,
@@ -337,7 +347,7 @@ def evaluate_dir(
     context_audio_paths = [_resolve_path(audio_dir, r.get('context_audio_filepath')) for r in records]
 
     # 2. Load models
-    models = load_evaluation_models(sv_model_type, asr_model_name, asr_model_type, device)
+    models = load_evaluation_models(sv_model_type, asr_model_name, asr_model_type, device, sv_model_path)
 
     asr_model = models['asr_model']
     feature_extractor = models['feature_extractor']
@@ -551,6 +561,7 @@ def evaluate(
     generated_audio_dir,
     language="en",
     sv_model_type="titanet",
+    sv_model_path=None,
     asr_model_name="stt_en_conformer_transducer_large",
     asr_model_type="nemo",
     with_utmosv2=True,
@@ -589,6 +600,7 @@ def evaluate(
         generated_audio_dir=generated_audio_dir,
         language=language,
         sv_model_type=sv_model_type,
+        sv_model_path=sv_model_path,
         asr_model_name=asr_model_name,
         asr_model_type=asr_model_type,
         with_utmosv2=with_utmosv2,

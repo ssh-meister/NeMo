@@ -1,0 +1,38 @@
+{
+  "libritts": {
+    "manifest_path": "en_US/libritts/eval_manifest.json",
+    "audio_dir": "en_US/libritts/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  },
+  "riva_en": {
+    "manifest_path": "en_US/riva/eval_manifest.json",
+    "audio_dir": "en_US/riva/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  },
+  "riva_en_hard_sentences": {
+    "manifest_path": "en_US/riva/eval_manifest_hard_sentences.json",
+    "audio_dir": "en_US/riva/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  },
+  "riva_en_short_sentences": {
+    "manifest_path": "en_US/riva/eval_manifest_short_sentences.json",
+    "audio_dir": "en_US/riva/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  },
+  "riva_en_qa": {
+    "manifest_path": "en_US/riva/eval_manifest_qa.json",
+    "audio_dir": "en_US/riva/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  },
+  "riva_en_qa_longform": {
+    "manifest_path": "en_US/riva/eval_manifest_qa_longform.json",
+    "audio_dir": "en_US/riva/audio",
+    "language": "en",
+    "asr_model": {"name": "eval_models/parakeet-tdt-1.1b.nemo", "type": "nemo"}
+  }
+}

@@ -318,6 +318,7 @@ def run_inference_and_evaluation(
             # Run evaluation
             eval_config_for_dataset = EvaluationConfig(
                 sv_model=eval_config.sv_model,
+                sv_model_path=eval_config.sv_model_path,
                 asr_model_name=asr_model_name,
                 asr_model_type=asr_model_type,
                 eou_model_name=eval_config.eou_model_name,
@@ -544,6 +545,12 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     eval_group.add_argument('--run_evaluation', action='store_true', help='Run evaluation after inference')
     eval_group.add_argument('--sv_model', type=str, default="titanet", choices=["titanet", "wavlm"])
     eval_group.add_argument(
+        '--sv_model_path',
+        type=str,
+        default=None,
+        help='Optional local TitaNet .nemo path; avoids downloading the primary speaker-verification model.',
+    )
+    eval_group.add_argument(
         '--asr_model_name',
         type=str,
         default='nvidia/parakeet-tdt-1.1b',
@@ -732,6 +739,7 @@ def main(argv=None):
 
     eval_config = EvaluationConfig(
         sv_model=args.sv_model,
+        sv_model_path=args.sv_model_path,
         asr_model_name=args.asr_model_name,
         asr_model_type=args.asr_model_type,
         eou_model_name=args.eou_model_name,

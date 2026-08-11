@@ -1,0 +1,83 @@
+# Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Licensed under the Apache License, Version 2.0.
+#
+# Override any value with a trailing Hydra dotlist assignment, for example:
+# output.root=/alternate/evaluation/root inference.batch_size=16
+assets:
+  eval_root: ${oc.env:EVAL_ROOT,/lustre/fsw/nemotron_speech_tts/data/evaluation_datasets}
+  tokenizer_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/artifacts/tokenizers/bpe_ipa_tokenizer_2048_en_de_es_fr_hi_it_vi_zh_ko-KR_pt-BR_ar.json
+  titanet_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/artifacts/speakerverification_en_titanet_large.nemo
+  eou_model_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/baseline/wav2vec2-base-960h
+
+models:
+  - name: magpie_v2607
+    display_name: MagpieTTS v2607
+    model_type: magpie
+    nemo_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/baseline/magpie_tts_multilingual_357m.nemo
+    codec_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/baseline/21fps_causal_codecmodel.nemo
+    temperature: 0.7
+  - name: emtts_2605_pretrained
+    display_name: EMTTS 2605 pretrained
+    model_type: easy_magpie
+    nemo_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/baseline/2605_EMTTS_SmallMamba_Step150k.nemo
+    codec_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/artifacts/25fps_spectral_codec_with_bandwidth_extension.nemo
+    temperature: 0.7
+  - name: easy_magpie_ytc_yodas_150k
+    display_name: EasyMagpie YTC+YODAS 150k
+    model_type: easy_magpie
+    nemo_path: /lustre/fsw/nemotron_speech_asr/users/ameister/experiments/EasyMagpie/2608_EasyMagpie_baseline_with_ytc_yodas_spectral_150000steps_bd200/checkpoints/Magpie-TTS-DecoderOnly-EN.nemo
+    codec_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/artifacts/25fps_spectral_codec_with_bandwidth_extension.nemo
+    temperature: 0.7
+  - name: easy_magpie_all_granary_150k
+    display_name: EasyMagpie All-Granary 150k
+    model_type: easy_magpie
+    nemo_path: /lustre/fsw/nemotron_speech_asr/users/ameister/experiments/EasyMagpie/2608_EasyMagpie_baseline_with_all_granary_5langs_spectral_150000steps_bd200/checkpoints/Magpie-TTS-DecoderOnly-EN.nemo
+    codec_path: ${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/models/artifacts/25fps_spectral_codec_with_bandwidth_extension.nemo
+    temperature: 0.7
+
+groups:
+  english:
+    config_path: ${oc.env:NEMO_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace/code/ZeroShotEMTTS/NeMo}/scripts/tts_eval_suite/eval_configs/english.json
+    benchmarks:
+      - libritts
+      - riva_en
+      - riva_en_hard_sentences
+      - riva_en_short_sentences
+      - riva_en_qa
+      - riva_en_qa_longform
+    audio_benchmarks: [libritts, riva_en_hard_sentences, riva_en_qa]
+  multilingual:
+    config_path: ${oc.env:NEMO_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace/code/ZeroShotEMTTS/NeMo}/scripts/tts_eval_suite/eval_configs/multilingual.json
+    benchmarks: [de_DE_cmltts, es_ES_cmltts, fr_FR_cmltts, it_IT_cmltts]
+    expected_records:
+      de_DE_cmltts: 100
+      es_ES_cmltts: 100
+      fr_FR_cmltts: 100
+      it_IT_cmltts: 100
+    audio_benchmarks: [de_DE_cmltts, es_ES_cmltts, fr_FR_cmltts, it_IT_cmltts]
+
+inference:
+  python: python
+  script: examples/tts/magpietts_inference.py
+  batch_size: 32
+  topk: 80
+  cfg_scale: 2.5
+  num_repeats: 1
+  use_cfg: true
+  run_evaluation: true
+  disable_fcd: true
+
+output:
+  root: ${oc.env:EVAL_OUTPUT_ROOT,${oc.env:WORKSPACE_ROOT,/lustre/fsw/nemotron_speech_asr/users/ameister/easymagpie_workspace}/evaluation/tts_four_model_v2607}
+  logs_dir: ${output.root}/logs
+  report_configs_dir: ${output.root}/report_configs
+
+reports:
+  enabled: true
+  audio: true
+  samples_per_benchmark: 20
+  task_id: ${oc.env:TTS_EVAL_TASK_ID,NEMOTTS-0000}
+  storage:
+    endpoint: ${oc.env:S3_ENDPOINT,""}
+    bucket: ${oc.env:S3_BUCKET,""}
+    region: ${oc.env:S3_REGION,us-west-2}

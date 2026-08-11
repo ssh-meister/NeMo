@@ -1,0 +1,38 @@
+{
+  "de_DE_cmltts": {
+    "manifest_path": "de_DE/cmltts-100/eval_manifest.json",
+    "audio_dir": "de_DE/cmltts-100/audio",
+    "language": "de",
+    "asr_model": {
+      "name": "eval_models/Parakeet-RNNT-Prompt-XXL-1.1b_merged_universal_spe_1.0.nemo",
+      "type": "nemo_with_prompt"
+    }
+  },
+  "es_ES_cmltts": {
+    "manifest_path": "es_ES/cmltts-100/eval_manifest.json",
+    "audio_dir": "es_ES/cmltts-100/audio",
+    "language": "es",
+    "asr_model": {
+      "name": "eval_models/Parakeet-RNNT-Prompt-XXL-1.1b_merged_universal_spe_1.0.nemo",
+      "type": "nemo_with_prompt"
+    }
+  },
+  "fr_FR_cmltts": {
+    "manifest_path": "fr_FR/cmltts-100/eval_manifest.json",
+    "audio_dir": "fr_FR/cmltts-100/audio",
+    "language": "fr",
+    "asr_model": {
+      "name": "eval_models/Parakeet-RNNT-Prompt-XXL-1.1b_merged_universal_spe_1.0.nemo",
+      "type": "nemo_with_prompt"
+    }
+  },
+  "it_IT_cmltts": {
+    "manifest_path": "it_IT/cmltts-100/eval_manifest.json",
+    "audio_dir": "it_IT/cmltts-100/audio",
+    "language": "it",
+    "asr_model": {
+      "name": "eval_models/Parakeet-RNNT-Prompt-XXL-1.1b_merged_universal_spe_1.0.nemo",
+      "type": "nemo_with_prompt"
+    }
+  }
+}
