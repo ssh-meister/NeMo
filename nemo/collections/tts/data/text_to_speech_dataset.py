@@ -451,16 +451,22 @@ class MagpieTTSDataset(TextToSpeechDataset):
             effective_duration_max = max(self.context_duration_min, effective_duration_max)
             return random.uniform(self.context_duration_min, effective_duration_max)
 
-        if data.tokenizer_names is not None:
-            # Pick a random tokenizer from the list of tokenizers
-            tokenizer_name = random.choice(data.tokenizer_names)
-        else:
-            tokenizer_name = self.default_tokenizer_name
-
         if data.language:
             language = data.language
         else:
             language = 'en'
+
+        if data.tokenizer_names is not None:
+            # Pick a random tokenizer from the list of tokenizers
+            tokenizer_name = random.choice(data.tokenizer_names)
+        elif self.text_tokenizer is not None:
+            tokenizer_name = get_tokenizer_for_language(
+                language,
+                list(self.text_tokenizer.tokenizers.keys()),
+                default_tokenizer=self.default_tokenizer_name,
+            )
+        else:
+            tokenizer_name = self.default_tokenizer_name
 
         tokens = tokenize_text_with_phoneme_spans(
             text_tokenizer=self.text_tokenizer,

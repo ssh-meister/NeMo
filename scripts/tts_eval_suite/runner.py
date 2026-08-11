@@ -255,7 +255,7 @@ def preflight(cfg, model_name: str | None = None, group_name: str | None = None,
     if errors:
         preview = "\n".join(f"- {error}" for error in errors[:100])
         remainder = len(errors) - 100
-        if remainder:
+        if remainder > 0:
             preview += f"\n- ... and {remainder} more error(s)"
         raise PreflightError(f"Preflight failed with {len(errors)} error(s):\n{preview}")
 
@@ -342,13 +342,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model")
     parser.add_argument("--group", choices=("english", "multilingual"))
     parser.add_argument("--no-resume", action="store_true")
-    parser.add_argument("overrides", nargs="*")
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
-    args = _parser().parse_args(argv)
-    cfg = load_config(args.config, args.overrides)
+    parser = _parser()
+    args, overrides = parser.parse_known_args(argv)
+    invalid = [value for value in overrides if value.startswith("-") or "=" not in value]
+    if invalid:
+        parser.error("unrecognized arguments: " + " ".join(invalid))
+    cfg = load_config(args.config, overrides)
     if args.action == "preflight":
         preflight(cfg, args.model, args.group, reports=False)
         print("Preflight passed.")

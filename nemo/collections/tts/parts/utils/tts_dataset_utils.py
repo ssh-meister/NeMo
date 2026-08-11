@@ -888,10 +888,15 @@ DEFAULT_LANGUAGE_THRESHOLDS = LanguageThresholds()
 # Used by both do_tts() and ChunkedTTSInferenceDataset
 LANGUAGE_TOKENIZER_MAP: Dict[str, List[str]] = {
     "en": ["english_phoneme", "english"],
+    "english": ["english_phoneme", "english"],
     "de": ["german_phoneme", "german"],
+    "german": ["german_phoneme", "german"],
     "es": ["spanish_phoneme", "spanish"],
+    "spanish": ["spanish_phoneme", "spanish"],
     "fr": ["french_chartokenizer", "french"],
+    "french": ["french_chartokenizer", "french"],
     "it": ["italian_phoneme", "italian"],
+    "italian": ["italian_phoneme", "italian"],
     "vi": ["vietnamese_phoneme", "vietnamese"],
     "zh": ["mandarin_phoneme", "mandarin", "chinese"],
     "hi": ["hindi_chartokenizer", "hindi"],

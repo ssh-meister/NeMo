@@ -18,7 +18,10 @@ import unicodedata
 from collections import defaultdict
 from typing import Dict, List, Optional, Union
 
-import pyopenjtalk
+try:
+    import pyopenjtalk
+except ImportError:
+    pyopenjtalk = None
 
 from nemo.collections.common.tokenizers.text_to_speech.ipa_lexicon import (
     GRAPHEME_CHARACTER_SETS,
@@ -186,8 +189,6 @@ class JapaneseKatakanaAccentG2p(BaseG2p):
         apply_to_oov_word=None,
         mapping_file: Optional[str] = None,
     ):
-        if pyopenjtalk is None:
-            raise ImportError("pyopenjtalk is required. Install with: pip install pyopenjtalk")
         if ascii_letter_prefix is None:
             ascii_letter_prefix = ""
 
@@ -277,6 +278,9 @@ class JapaneseKatakanaAccentG2p(BaseG2p):
         For example, The text "こんにちは" would be converted as a list,
         `['0', 'コ', '1', 'ン', '1', 'ニ', '1', 'チ', '1', 'ワ']`
         """
+        if pyopenjtalk is None:
+            raise ImportError("pyopenjtalk is required for Japanese G2P. Install with: pip install pyopenjtalk")
+
         text = set_grapheme_case(text, case=self.ascii_letter_case)
 
         # njd (Nihongo Jisho Data): List of word dictionaries with linguistic features

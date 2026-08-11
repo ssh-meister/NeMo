@@ -1138,3 +1138,26 @@ class TestGetTokenizerForLanguage:
         )
 
         assert result == "english_phoneme"
+
+    @pytest.mark.run_only_on('CPU')
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        ("language", "expected"),
+        [
+            ("english", "english_phoneme"),
+            ("german", "german_phoneme"),
+            ("spanish", "spanish_phoneme"),
+            ("french", "french_chartokenizer"),
+            ("italian", "italian_phoneme"),
+        ],
+    )
+    def test_manifest_language_names_use_matching_tokenizer(self, language, expected):
+        available = [
+            "english_phoneme",
+            "german_phoneme",
+            "spanish_phoneme",
+            "french_chartokenizer",
+            "italian_phoneme",
+        ]
+
+        assert get_tokenizer_for_language(language, available) == expected
